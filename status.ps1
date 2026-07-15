@@ -1,4 +1,4 @@
-# status.ps1 — состояние наблюдателя и стабилизатора: живы ли процессы, хвосты логов.
+﻿# status.ps1 — состояние наблюдателя и стабилизатора: живы ли процессы, хвосты логов.
 $ErrorActionPreference = 'Continue'
 $dir = Split-Path -Parent $MyInvocation.MyCommand.Path
 

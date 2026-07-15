@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
   quickstart.ps1 — установка Kimi Approve Watch одной командой.
@@ -22,7 +22,9 @@ if ($env:KAW_DIR)  { $Dir  = $env:KAW_DIR }
 if ($env:KAW_MODE) { $Mode = $env:KAW_MODE }
 
 Write-Host ''
-Write-Host '  Kimi Approve Watch — quickstart' -ForegroundColor Cyan
+Write-Host '  ┌───────────────────────────────┐' -ForegroundColor Cyan
+Write-Host '  │   Kimi Approve Watch v0.2.0   │' -ForegroundColor Cyan
+Write-Host '  └───────────────────────────────┘' -ForegroundColor Cyan
 Write-Host "  Каталог: $Dir"
 Write-Host ''
 

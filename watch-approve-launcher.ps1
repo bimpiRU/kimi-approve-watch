@@ -1,4 +1,4 @@
-# watch-approve-launcher.ps1 — обёртка автозапуска для наблюдателя/стабилизатора.
+﻿# watch-approve-launcher.ps1 — обёртка автозапуска для наблюдателя/стабилизатора.
 # Перезапускает целевой скрипт, если тот упал (фатальная ошибка). Выход — по файлу STOP.
 # Если другой экземпляр уже держит наблюдение (мьютекс) — ждёт, не плодит дубли.
 #
@@ -24,6 +24,8 @@ if ($TargetArgs.Trim()) { $argList = $TargetArgs -split '\s+' | Where-Object { $
 function LLog([string]$msg) {
   Add-Content -Path $logFile -Value ((Get-Date -Format 'yyyy-MM-dd HH:mm:ss') + ' launcher: ' + $msg) -Encoding UTF8
 }
+
+if (-not (Test-Path $targetPath)) { LLog "target $Target not found, exit"; exit 1 }
 
 $mutex = New-Object System.Threading.Mutex($false, $MutexName)
 

@@ -5,3 +5,6 @@ stabilizer.log
 stabilizer.pid
 stabilizer.enabled
 STOP
+
+# локальный конфиг пользователя
+kaw.config.psd1

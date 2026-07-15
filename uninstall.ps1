@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
   Полное удаление Kimi Approve Watch: остановка наблюдателя + снятие автозапуска.
@@ -12,11 +12,17 @@ $lnkPath  = Join-Path ([Environment]::GetFolderPath('Startup')) 'KimiApproveWatc
 # 1. мягкая остановка через STOP (общий для наблюдателя и стабилизатора)
 New-Item -Path $stopFile -ItemType File -Force | Out-Null
 Write-Host 'STOP создан, жду завершения всех модулей...' -ForegroundColor Yellow
-Start-Sleep -Seconds 35
+
+# ждём, пока процессы завершатся сами (до 40 сек), вместо фиксированной паузы
+$deadline = (Get-Date).AddSeconds(40)
+$mine = @()
+do {
+    Start-Sleep -Seconds 2
+    $mine = @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
+              Where-Object { $_.CommandLine -and $_.CommandLine.Contains($dir) })
+} while ($mine.Count -gt 0 -and (Get-Date) -lt $deadline)
 
 # 2. добиваем оставшиеся процессы наших скриптов
-$mine = Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" |
-        Where-Object { $_.CommandLine -and $_.CommandLine.Contains($dir) }
 foreach ($p in $mine) {
     Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue
     Write-Host "  остановлен PID $($p.ProcessId)"

@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
   stabilize.ps1 — стабилизатор ПК на время долгой работы агентов в терминалах.
@@ -24,6 +24,9 @@
 
   Стоп: файл STOP рядом со скриптом (общий с watch-approve — stop-watcher.ps1 гасит оба).
   Лог:  stabilizer.log.
+
+  Необязательный конфиг: kaw.config.psd1 рядом со скриптом (секция Stabilizer).
+  Параметры командной строки важнее значений из конфига.
 
 .PARAMETER IntervalSeconds   период проверки ресурсов, сек (по умолчанию 30)
 .PARAMETER MinFreeRamGB      тревога, если свободной RAM меньше, ГБ (по умолчанию 1.5)
@@ -55,6 +58,9 @@ $pidFile  = Join-Path $dir 'stabilizer.pid'
 
 $PID | Out-File -FilePath $pidFile -Encoding ascii
 
+# мягкость: собственный процесс — с пониженным приоритетом
+try { (Get-Process -Id $PID).PriorityClass = 'BelowNormal' } catch {}
+
 $sig = @'
 using System;
 using System.Runtime.InteropServices;
@@ -78,6 +84,26 @@ function Test-PendingReboot {
   return (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending') -or
          (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired')
 }
+
+# --- необязательный конфиг kaw.config.psd1 (параметры CLI важнее) ---
+function Apply-Config([hashtable]$Cfg, [string]$Section, [hashtable]$Bound) {
+  if (-not $Cfg -or -not $Cfg.ContainsKey($Section)) { return 0 }
+  $applied = 0
+  foreach ($k in $Cfg[$Section].Keys) {
+    if (-not $Bound.ContainsKey($k)) { Set-Variable -Name $k -Value $Cfg[$Section][$k] -Scope 1; $applied++ }
+  }
+  return $applied
+}
+$cfgFile = Join-Path $dir 'kaw.config.psd1'
+if (Test-Path $cfgFile) {
+  try {
+    $n = Apply-Config (Import-PowerShellDataFile $cfgFile) 'Stabilizer' $PSBoundParameters
+    if ($n -gt 0) { SLog "config loaded: kaw.config.psd1 ($n values)" }
+  } catch { SLog ("config error: " + $_.Exception.Message) }
+}
+
+# WatchDrives может прийти одной строкой "C:,D:" (из конфига/через лаунчер) — нормализуем
+$WatchDrives = @($WatchDrives | ForEach-Object { "$_" -split ',' } | Where-Object { $_.Trim() } | ForEach-Object { $_.Trim() })
 
 # только один экземпляр
 $script:mutex = New-Object System.Threading.Mutex($false, 'Local\KimiPcStabilizer')

@@ -1,10 +1,11 @@
-# =============================================================================
+﻿# =============================================================================
 # watch-approve.ps1 — автономный наблюдатель за диалогами подтверждения Kimi CLI.
 #
 # Каждые N секунд сканирует видимые окна Windows Terminal, находит активный
-# диалог "Run this command? / 1. Approve once / ... / 1/2/3/4 choose" в окнах
-# Kimi CLI и нажимает "1" (Approve once). После апрува чистит мусорный символ
-# "1", который TUI оставляет в строке ввода. Держит ПК бодрствующим.
+# диалог (по профилю агента) и нажимает выбранный вариант (по умолчанию "1" —
+# одноразовый апрув). После апрува чистит мусорный символ в строке ввода.
+# Держит ПК бодрствующим. Работает мягко: пониженный приоритет собственного
+# процесса, чтение только TermControl-элементов, возврат фокуса прежнему окну.
 #
 # Стоп: создать файл STOP рядом со скриптом (или stop-watcher.ps1).
 # Лог:  watcher.log рядом со скриптом.
@@ -14,14 +15,22 @@
 #   -ExcludeHwnd <long[]>    hwnd окон, которые НЕ трогать (напр. своё окно)
 #   -Agents <строка>         профили агентов через запятую: kimi, claude
 #                            (по умолчанию kimi; claude — экспериментально)
+#   -ApproveKey <1|2|3>      какой вариант диалога нажимать (по умолчанию 1 —
+#                            одноразовый апрув; 2 = "approve always", осторожно!)
 #   -NoKeepAwake             не блокировать сон/отключение дисплея
+#   -NoFocusRestore          не возвращать фокус прежнему окну после нажатия
 #   -Once                    один цикл сканирования и выход (для тестов)
+#
+# Необязательный конфиг: kaw.config.psd1 рядом со скриптом (секция Watcher).
+# Параметры командной строки важнее значений из конфига.
 # =============================================================================
 param(
   [int]$IntervalSeconds = 10,
   [long[]]$ExcludeHwnd = @(),
   [string]$Agents = 'kimi',
+  [ValidateSet('','1','2','3')][string]$ApproveKey = '',
   [switch]$NoKeepAwake,
+  [switch]$NoFocusRestore,
   [switch]$Once
 )
 
@@ -32,6 +41,9 @@ $logFile = Join-Path $dir 'watcher.log'
 $pidFile = Join-Path $dir 'watcher.pid'
 
 $PID | Out-File -FilePath $pidFile -Encoding ascii
+
+# мягкость: собственный процесс — с пониженным приоритетом
+try { (Get-Process -Id $PID).PriorityClass = 'BelowNormal' } catch {}
 
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
@@ -49,7 +61,6 @@ public class WaApi {
   [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
   [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetClassName(IntPtr hWnd, StringBuilder sb, int max);
   [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr hWnd);
-  [DllImport("user32.dll")] public static extern bool IsZoomed(IntPtr hWnd);
   [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int cmd);
   [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
   [DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr hWnd);
@@ -77,23 +88,44 @@ function Log([string]$msg) {
   Add-Content -Path $logFile -Value $line -Encoding UTF8
 }
 
+# --- необязательный конфиг kaw.config.psd1 (параметры CLI важнее) ---
+function Apply-Config([hashtable]$Cfg, [string]$Section, [hashtable]$Bound) {
+  if (-not $Cfg -or -not $Cfg.ContainsKey($Section)) { return 0 }
+  $applied = 0
+  foreach ($k in $Cfg[$Section].Keys) {
+    if (-not $Bound.ContainsKey($k)) { Set-Variable -Name $k -Value $Cfg[$Section][$k] -Scope 1; $applied++ }
+  }
+  return $applied
+}
+$cfgFile = Join-Path $dir 'kaw.config.psd1'
+if (Test-Path $cfgFile) {
+  try {
+    $n = Apply-Config (Import-PowerShellDataFile $cfgFile) 'Watcher' $PSBoundParameters
+    if ($n -gt 0) { Log "config loaded: kaw.config.psd1 ($n values)" }
+  } catch { Log ("config error: " + $_.Exception.Message) }
+}
+
+# из конфига/CLI ExcludeHwnd может прийти одной строкой "111,222" — нормализуем
+$ExcludeHwnd = @($ExcludeHwnd | ForEach-Object { "$_" -split ',' } |
+  Where-Object { $_.Trim() } | ForEach-Object { [long]$_.Trim() })
+
 function Get-WinInfo([IntPtr]$h) {
   $info = [PSCustomObject]@{ Title = ''; Text = $null }
   try {
     $root = [System.Windows.Automation.AutomationElement]::FromHandle($h)
     if (-not $root) { return $info }
     $info.Title = ('' + $root.Current.Name)
-    $all = $root.FindAll([System.Windows.Automation.TreeScope]::Descendants,
-      [System.Windows.Automation.Condition]::TrueCondition)
+    # лёгкость: только TermControl-элементы, а не всё дерево окна
+    $cond = New-Object System.Windows.Automation.PropertyCondition(
+      [System.Windows.Automation.AutomationElement]::ClassNameProperty, 'TermControl')
+    $all = $root.FindAll([System.Windows.Automation.TreeScope]::Descendants, $cond)
     $sb = New-Object System.Text.StringBuilder
     foreach ($el in $all) {
-      if ($el.Current.ClassName -match 'TermControl') {
-        try {
-          $tp = $el.GetCurrentPattern([System.Windows.Automation.TextPattern]::Pattern)
-          # -1 = весь буфер, без обрезки: диалог всегда в самом низу
-          [void]$sb.AppendLine($tp.DocumentRange.GetText(-1))
-        } catch {}
-      }
+      try {
+        $tp = $el.GetCurrentPattern([System.Windows.Automation.TextPattern]::Pattern)
+        # -1 = весь буфер, без обрезки: диалог всегда в самом низу
+        [void]$sb.AppendLine($tp.DocumentRange.GetText(-1))
+      } catch {}
     }
     $info.Text = $sb.ToString()
   } catch {}
@@ -114,6 +146,13 @@ function Send-Key([IntPtr]$h, [string]$keys) {
   [WaApi]::AttachThreadInput($myThread, $fgThread, $false) | Out-Null
   Start-Sleep -Milliseconds 400
   [System.Windows.Forms.SendKeys]::SendWait($keys)
+  # мягкость: вернуть фокус окну, которое было активно до нажатия
+  if (-not $NoFocusRestore -and $fg -ne [IntPtr]::Zero -and $fg -ne $h) {
+    Start-Sleep -Milliseconds 150
+    [WaApi]::AttachThreadInput($myThread, $fgThread, $true) | Out-Null
+    [WaApi]::SetForegroundWindow($fg) | Out-Null
+    [WaApi]::AttachThreadInput($myThread, $fgThread, $false) | Out-Null
+  }
 }
 
 function Has-Dialog([string]$text, [string[]]$needles) {
@@ -127,22 +166,22 @@ function Has-Dialog([string]$text, [string[]]$needles) {
   return $true
 }
 
-function Input-Is-Stray1([string]$text) {
+function Input-Is-StrayKey([string]$text, [string]$key) {
   $lines = ($text -split "`r?`n") | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' }
   for ($i = $lines.Count - 1; $i -ge 0; $i--) {
     $norm = ($lines[$i] -replace '[^0-9A-Za-zА-Яа-я>]', '')   # срезаем рамку ╭│╯, пробелы, курсор █
-    if ($norm -eq '>1') { return $true }
+    if ($norm -eq ('>' + $key)) { return $true }
     if ($norm.StartsWith('>')) { return $false }  # чужой ввод — не трогаем
   }
   return $false
 }
 
 # Профили агентов: Marker — признак окна агента в буфере (regex, $null = любое окно),
-# Dialog — все строки, которые должны быть в хвосте буфера у активного диалога.
-# Во всех профилях "1" = одноразовое подтверждение (никогда не "always").
+# Dialog — все строки, которые должны быть в хвосте буфера у активного диалога,
+# Key — какой вариант нажимать (в профилях по умолчанию "1" = одноразовый апрув).
 $profileTable = @{
-  kimi   = @{ Marker = 'kimi-for-coding'; Dialog = @('Approve once', '1/2/3/4 choose') }
-  claude = @{ Marker = $null;             Dialog = @('Do you want to proceed', '1. Yes') }
+  kimi   = @{ Marker = 'kimi-for-coding'; Dialog = @('Approve once', '1/2/3/4 choose'); Key = '1' }
+  claude = @{ Marker = $null;             Dialog = @('Do you want to proceed', '1. Yes'); Key = '1' }
 }
 $activeProfiles = @()
 foreach ($a in ($Agents -split ',')) {
@@ -150,6 +189,7 @@ foreach ($a in ($Agents -split ',')) {
   if ($a -and $profileTable.Contains($a)) { $activeProfiles += $profileTable[$a] }
 }
 if (-not $activeProfiles) { Log "no known agent profiles in -Agents '$Agents', exit"; exit 1 }
+if ($ApproveKey) { foreach ($p in $activeProfiles) { $p.Key = $ApproveKey } }
 
 # только один экземпляр наблюдателя
 $script:mutex = New-Object System.Threading.Mutex($false, 'Local\KimiApproveWatch')
@@ -160,7 +200,7 @@ if (-not $NoKeepAwake) {
   [WaApi]::SetThreadExecutionState([Convert]::ToUInt32(0x80000003L)) | Out-Null  # ES_CONTINUOUS|ES_SYSTEM_REQUIRED|ES_DISPLAY_REQUIRED
 }
 
-Log "watcher started (PID $PID)$(if ($Once) {' [ONCE mode]'}), interval ${IntervalSeconds}s, keep-awake $(-not $NoKeepAwake), agents=[$Agents]"
+Log "watcher started (PID $PID)$(if ($Once) {' [ONCE mode]'}), interval ${IntervalSeconds}s, keep-awake $(-not $NoKeepAwake), agents=[$Agents], key=$($activeProfiles[0].Key)"
 
 while ($true) {
   if (Test-Path $stopFile) { Log "STOP file found, exit"; break }
@@ -178,16 +218,17 @@ while ($true) {
         foreach ($prof in $activeProfiles) {
           if ($prof.Marker -and $text -notmatch $prof.Marker) { continue }   # не окно этого агента
           $attempt = 0
+          $key = $prof.Key
           while ((Has-Dialog $text $prof.Dialog) -and $attempt -lt 3) {
             $attempt++
-            Log ("dialog in hwnd " + $h.ToInt64() + " ('" + $info.Title.Trim() + "') — sending '1' (attempt $attempt)")
-            Send-Key $h '1'
+            Log ("dialog in hwnd " + $h.ToInt64() + " ('" + $info.Title.Trim() + "') — sending '$key' (attempt $attempt)")
+            Send-Key $h $key
             Start-Sleep -Milliseconds 1200
             $text2 = Get-TermText $h
             if (Has-Dialog $text2 $prof.Dialog) { $text = $text2; continue }
-            if (Input-Is-Stray1 $text2) {
+            if (Input-Is-StrayKey $text2 $key) {
               Send-Key $h '{BACKSPACE}'
-              Log ("cleaned stray '1' in hwnd " + $h.ToInt64())
+              Log ("cleaned stray '$key' in hwnd " + $h.ToInt64())
             }
             Log ("approved in hwnd " + $h.ToInt64())
             break

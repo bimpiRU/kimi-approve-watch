@@ -1,4 +1,4 @@
-# show-windows.ps1 — список окон Windows Terminal: hwnd, заголовок, свёрнуто ли,
+﻿# show-windows.ps1 — список окон Windows Terminal: hwnd, заголовок, свёрнуто ли,
 # есть ли активный диалог Approve. Нужен, чтобы найти hwnd для -ExcludeHwnd.
 $ErrorActionPreference = 'Continue'
 Add-Type -AssemblyName UIAutomationClient
