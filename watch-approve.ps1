@@ -12,12 +12,15 @@
 # Параметры:
 #   -IntervalSeconds <int>   период сканирования, сек (по умолчанию 10)
 #   -ExcludeHwnd <long[]>    hwnd окон, которые НЕ трогать (напр. своё окно)
+#   -Agents <строка>         профили агентов через запятую: kimi, claude
+#                            (по умолчанию kimi; claude — экспериментально)
 #   -NoKeepAwake             не блокировать сон/отключение дисплея
 #   -Once                    один цикл сканирования и выход (для тестов)
 # =============================================================================
 param(
   [int]$IntervalSeconds = 10,
   [long[]]$ExcludeHwnd = @(),
+  [string]$Agents = 'kimi',
   [switch]$NoKeepAwake,
   [switch]$Once
 )
@@ -113,12 +116,15 @@ function Send-Key([IntPtr]$h, [string]$keys) {
   [System.Windows.Forms.SendKeys]::SendWait($keys)
 }
 
-function Has-Dialog([string]$text) {
+function Has-Dialog([string]$text, [string[]]$needles) {
   # активный диалог всегда внизу буфера; смотрим только хвост,
   # чтобы не срабатывать на упоминания диалога в скроллбэке
   $lines = ($text -split "`r?`n") | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' }
   $tail = ($lines | Select-Object -Last 15) -join "`n"
-  return ($tail -match 'Approve once' -and $tail -match '1/2/3/4 choose')
+  foreach ($n in $needles) {
+    if ($tail -notmatch [regex]::Escape($n)) { return $false }
+  }
+  return $true
 }
 
 function Input-Is-Stray1([string]$text) {
@@ -131,6 +137,20 @@ function Input-Is-Stray1([string]$text) {
   return $false
 }
 
+# Профили агентов: Marker — признак окна агента в буфере (regex, $null = любое окно),
+# Dialog — все строки, которые должны быть в хвосте буфера у активного диалога.
+# Во всех профилях "1" = одноразовое подтверждение (никогда не "always").
+$profileTable = @{
+  kimi   = @{ Marker = 'kimi-for-coding'; Dialog = @('Approve once', '1/2/3/4 choose') }
+  claude = @{ Marker = $null;             Dialog = @('Do you want to proceed', '1. Yes') }
+}
+$activeProfiles = @()
+foreach ($a in ($Agents -split ',')) {
+  $a = $a.Trim()
+  if ($a -and $profileTable.Contains($a)) { $activeProfiles += $profileTable[$a] }
+}
+if (-not $activeProfiles) { Log "no known agent profiles in -Agents '$Agents', exit"; exit 1 }
+
 # только один экземпляр наблюдателя
 $script:mutex = New-Object System.Threading.Mutex($false, 'Local\KimiApproveWatch')
 if (-not $script:mutex.WaitOne(0)) { Log "another instance is running, exit"; exit 0 }
@@ -140,7 +160,7 @@ if (-not $NoKeepAwake) {
   [WaApi]::SetThreadExecutionState([Convert]::ToUInt32(0x80000003L)) | Out-Null  # ES_CONTINUOUS|ES_SYSTEM_REQUIRED|ES_DISPLAY_REQUIRED
 }
 
-Log "watcher started (PID $PID)$(if ($Once) {' [ONCE mode]'}), interval ${IntervalSeconds}s, keep-awake $(-not $NoKeepAwake)"
+Log "watcher started (PID $PID)$(if ($Once) {' [ONCE mode]'}), interval ${IntervalSeconds}s, keep-awake $(-not $NoKeepAwake), agents=[$Agents]"
 
 while ($true) {
   if (Test-Path $stopFile) { Log "STOP file found, exit"; break }
@@ -155,21 +175,23 @@ while ($true) {
         $text = $info.Text
         if ([string]::IsNullOrEmpty($text)) { continue }
         if ($text -match 'approve-watch') { continue }          # сессия, обсуждающая этого бота
-        if ($text -notmatch 'kimi-for-coding') { continue }     # не окно Kimi CLI
-        $attempt = 0
-        while ((Has-Dialog $text) -and $attempt -lt 3) {
-          $attempt++
-          Log ("dialog in hwnd " + $h.ToInt64() + " ('" + $info.Title.Trim() + "') — sending '1' (attempt $attempt)")
-          Send-Key $h '1'
-          Start-Sleep -Milliseconds 1200
-          $text2 = Get-TermText $h
-          if (Has-Dialog $text2) { $text = $text2; continue }
-          if (Input-Is-Stray1 $text2) {
-            Send-Key $h '{BACKSPACE}'
-            Log ("cleaned stray '1' in hwnd " + $h.ToInt64())
+        foreach ($prof in $activeProfiles) {
+          if ($prof.Marker -and $text -notmatch $prof.Marker) { continue }   # не окно этого агента
+          $attempt = 0
+          while ((Has-Dialog $text $prof.Dialog) -and $attempt -lt 3) {
+            $attempt++
+            Log ("dialog in hwnd " + $h.ToInt64() + " ('" + $info.Title.Trim() + "') — sending '1' (attempt $attempt)")
+            Send-Key $h '1'
+            Start-Sleep -Milliseconds 1200
+            $text2 = Get-TermText $h
+            if (Has-Dialog $text2 $prof.Dialog) { $text = $text2; continue }
+            if (Input-Is-Stray1 $text2) {
+              Send-Key $h '{BACKSPACE}'
+              Log ("cleaned stray '1' in hwnd " + $h.ToInt64())
+            }
+            Log ("approved in hwnd " + $h.ToInt64())
+            break
           }
-          Log ("approved in hwnd " + $h.ToInt64())
-          break
         }
       }
     }

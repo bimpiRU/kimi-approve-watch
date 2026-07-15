@@ -9,10 +9,10 @@ $stopFile = Join-Path $dir 'STOP'
 $taskName = 'KimiApproveWatchGate'
 $lnkPath  = Join-Path ([Environment]::GetFolderPath('Startup')) 'KimiApproveWatch.lnk'
 
-# 1. мягкая остановка через STOP
+# 1. мягкая остановка через STOP (общий для наблюдателя и стабилизатора)
 New-Item -Path $stopFile -ItemType File -Force | Out-Null
-Write-Host 'STOP создан, жду завершения...' -ForegroundColor Yellow
-Start-Sleep -Seconds 12
+Write-Host 'STOP создан, жду завершения всех модулей...' -ForegroundColor Yellow
+Start-Sleep -Seconds 35
 
 # 2. добиваем оставшиеся процессы наших скриптов
 $mine = Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" |

@@ -1,4 +1,7 @@
 # runtime artifacts
 watcher.log
 watcher.pid
+stabilizer.log
+stabilizer.pid
+stabilizer.enabled
 STOP

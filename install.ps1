@@ -19,6 +19,9 @@
 param(
     [ValidateSet('gate','startup','none')]
     [string]$Mode = '',
+    # Включить/выключить стабилизатор ПК (stabilize.ps1). Если не задано — спросит в меню.
+    [switch]$WithStabilizer,
+    [switch]$NoStabilizer,
     # Внутренний флаг: при элевации только создать задачу, не запускать наблюдателя.
     [switch]$SkipStart
 )
@@ -26,8 +29,9 @@ param(
 $ErrorActionPreference = 'Stop'
 $dir       = Split-Path -Parent $MyInvocation.MyCommand.Path
 $watcher   = Join-Path $dir 'watch-approve.ps1'
-$launcher  = Join-Path $dir 'watch-approve-launcher.ps1'
 $gate      = Join-Path $dir 'watcher-gate.ps1'
+$startAll  = Join-Path $dir 'start-all.ps1'
+$stabFlag  = Join-Path $dir 'stabilizer.enabled'
 $taskName  = 'KimiApproveWatchGate'
 $lnkPath   = Join-Path ([Environment]::GetFolderPath('Startup')) 'KimiApproveWatch.lnk'
 $psExe     = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
@@ -52,7 +56,7 @@ function Install-StartupLnk {
     $wsh = New-Object -ComObject WScript.Shell
     $lnk = $wsh.CreateShortcut($lnkPath)
     $lnk.TargetPath = $psExe
-    $lnk.Arguments  = ('-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "{0}"' -f $launcher)
+    $lnk.Arguments  = ('-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "{0}"' -f $startAll)
     $lnk.WorkingDirectory = $dir
     $lnk.WindowStyle = 7
     $lnk.Description = 'Kimi Approve Watch'
@@ -78,6 +82,18 @@ if (-not $Mode) {
     }
 }
 
+# --- стабилизатор ПК ---
+if (-not $WithStabilizer -and -not $NoStabilizer) {
+    $s = (Read-Host '  Включить стабилизатор ПК (RAM/диск/сеть/питание)? [Y/n]').Trim()
+    if ($s -eq '' -or $s -match '^(y|Y|д|Д|да|Да)$') { $WithStabilizer = $true } else { $NoStabilizer = $true }
+}
+if ($WithStabilizer) {
+    New-Item -Path $stabFlag -ItemType File -Force | Out-Null
+    Write-Host '[OK] Стабилизатор включён (stabilizer.enabled).' -ForegroundColor Green
+} else {
+    Remove-Item $stabFlag -Force -ErrorAction SilentlyContinue
+}
+
 # --- автозапуск ---
 if ($Mode -eq 'gate') {
     try {
@@ -100,15 +116,18 @@ if ($Mode -eq 'gate') {
     Write-Host "[OK] Ярлык добавлен в автозагрузку: $lnkPath" -ForegroundColor Green
 }
 
-# --- запуск наблюдателя сейчас ---
+# --- запуск сейчас ---
 if (-not $SkipStart) {
     Remove-Item (Join-Path $dir 'STOP') -Force -ErrorAction SilentlyContinue
-    & $psExe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File $launcher
+    & $psExe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File $startAll
     Start-Sleep -Milliseconds 700
     $log = Join-Path $dir 'watcher.log'
     if (Test-Path $log) {
         Write-Host "[OK] Наблюдатель запущен. Лог: $log" -ForegroundColor Green
         Get-Content $log -Tail 2 | ForEach-Object { Write-Host "     $_" }
+    }
+    if ($WithStabilizer) {
+        Write-Host "[OK] Стабилизатор запускается. Лог: $(Join-Path $dir 'stabilizer.log')" -ForegroundColor Green
     }
     Write-Host ''
     Write-Host 'Управление:  .\status.ps1 - состояние,  .\stop-watcher.ps1 - стоп,  .\uninstall.ps1 - удаление' -ForegroundColor DarkCyan
