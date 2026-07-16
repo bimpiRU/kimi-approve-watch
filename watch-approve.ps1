@@ -1,4 +1,4 @@
-﻿# =============================================================================
+# =============================================================================
 # watch-approve.ps1 — автономный наблюдатель за диалогами подтверждения Kimi CLI.
 #
 # Каждые N секунд сканирует видимые окна Windows Terminal, находит активный
@@ -18,7 +18,7 @@
 #   -ApproveKey <1|2|3>      какой вариант диалога нажимать (по умолчанию 1 —
 #                            одноразовый апрув; 2 = "approve always", осторожно!)
 #   -NoKeepAwake             не блокировать сон/отключение дисплея
-#   -NoFocusRestore          не возвращать фокус прежнему окну после нажатия
+#   -FocusRestore            вернуть фокус прежнему окну после нажатия (по умолчанию выключено — безопаснее для надёжности)
 #   -Once                    один цикл сканирования и выход (для тестов)
 #
 # Необязательный конфиг: kaw.config.psd1 рядом со скриптом (секция Watcher).
@@ -30,7 +30,7 @@ param(
   [string]$Agents = 'kimi',
   [ValidateSet('','1','2','3')][string]$ApproveKey = '',
   [switch]$NoKeepAwake,
-  [switch]$NoFocusRestore,
+  [switch]$FocusRestore,
   [switch]$Once
 )
 
@@ -147,7 +147,7 @@ function Send-Key([IntPtr]$h, [string]$keys) {
   Start-Sleep -Milliseconds 400
   [System.Windows.Forms.SendKeys]::SendWait($keys)
   # мягкость: вернуть фокус окну, которое было активно до нажатия
-  if (-not $NoFocusRestore -and $fg -ne [IntPtr]::Zero -and $fg -ne $h) {
+  if ($FocusRestore -and $fg -ne [IntPtr]::Zero -and $fg -ne $h) {
     Start-Sleep -Milliseconds 150
     [WaApi]::AttachThreadInput($myThread, $fgThread, $true) | Out-Null
     [WaApi]::SetForegroundWindow($fg) | Out-Null

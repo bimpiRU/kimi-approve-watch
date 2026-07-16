@@ -1,4 +1,4 @@
-﻿# start-all.ps1 — единая точка запуска: наблюдатель апрувов + стабилизатор ПК.
+# start-all.ps1 — единая точка запуска: наблюдатель апрувов + стабилизатор ПК.
 # Вызывается установщиком, шлюзом (watcher-gate.ps1) и ярлыком автозагрузки.
 # Аргументы модулей берутся из kaw.config.psd1 (если есть), иначе — по умолчанию.
 $ErrorActionPreference = 'Continue'
@@ -28,7 +28,7 @@ function Build-Args([hashtable]$s, [string[]]$switches, [string[]]$values) {
 # 1. наблюдатель апрувов
 $watcherArgs = ''
 if ($cfg -and $cfg.Watcher) {
-  $watcherArgs = Build-Args $cfg.Watcher @('NoKeepAwake','NoFocusRestore') @('IntervalSeconds','Agents','ApproveKey','ExcludeHwnd')
+  $watcherArgs = Build-Args $cfg.Watcher @('NoKeepAwake','FocusRestore') @('IntervalSeconds','Agents','ApproveKey','ExcludeHwnd')
 }
 Start-Process $psExe -WindowStyle Hidden -ArgumentList (
   '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "{0}" -Target "{1}" -MutexName "{2}" -TargetArgs "{3}"' -f

@@ -104,7 +104,7 @@ Copy `kaw.config.example.psd1` → `kaw.config.psd1` and edit. The config applie
     Agents          = 'kimi'    # 'kimi' or 'kimi,claude'
     ApproveKey      = ''        # '' = 1 (approve once); '1'|'2'|'3' to override
     ExcludeHwnd     = @()       # @(3344318) — never touch these windows
-    NoFocusRestore  = $false    # $true — keep focus on the agent window
+    FocusRestore    = $false    # $true — return focus to previous window (experimental)
   }
   Stabilizer = @{
     MinFreeRamGB = 1.5; MinFreeDiskGB = 5; WatchDrives = @('C:')

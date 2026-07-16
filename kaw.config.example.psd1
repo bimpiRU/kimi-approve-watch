@@ -8,7 +8,7 @@
     ApproveKey      = ''          # '' = апрув по умолчанию ('1'); '1'|'2'|'3' — свой вариант
     ExcludeHwnd     = @()         # hwnd окон, которые не трогать: @(3344318)
     NoKeepAwake     = $false      # $true — не блокировать сон
-    NoFocusRestore  = $false      # $true — не возвращать фокус прежнему окну
+    FocusRestore    = $false    # $true — вернуть фокус прежнему окну (экспериментально)
   }
 
   Stabilizer = @{
