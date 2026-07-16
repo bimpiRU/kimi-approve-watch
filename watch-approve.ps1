@@ -19,6 +19,7 @@
 #                            одноразовый апрув; 2 = "approve always", осторожно!)
 #   -NoKeepAwake             не блокировать сон/отключение дисплея
 #   -FocusRestore            вернуть фокус прежнему окну после нажатия (по умолчанию выключено — безопаснее для надёжности)
+#   -NoSelfSkip              не пропускать окна, в которых обсуждается этот бот
 #   -Once                    один цикл сканирования и выход (для тестов)
 #
 # Необязательный конфиг: kaw.config.psd1 рядом со скриптом (секция Watcher).
@@ -31,6 +32,7 @@ param(
   [ValidateSet('','1','2','3')][string]$ApproveKey = '',
   [switch]$NoKeepAwake,
   [switch]$FocusRestore,
+  [switch]$NoSelfSkip,
   [switch]$Once
 )
 
@@ -214,7 +216,7 @@ while ($true) {
         $info = Get-WinInfo $h
         $text = $info.Text
         if ([string]::IsNullOrEmpty($text)) { continue }
-        if ($text -match 'approve-watch') { continue }          # сессия, обсуждающая этого бота
+        if ($text -match 'approve-watch' -and -not $NoSelfSkip) { continue }          # сессия, обсуждающая этого бота
         foreach ($prof in $activeProfiles) {
           if ($prof.Marker -and $text -notmatch $prof.Marker) { continue }   # не окно этого агента
           $attempt = 0

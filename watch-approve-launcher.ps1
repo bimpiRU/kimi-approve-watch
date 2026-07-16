@@ -1,4 +1,4 @@
-﻿# watch-approve-launcher.ps1 — обёртка автозапуска для наблюдателя/стабилизатора.
+# watch-approve-launcher.ps1 — обёртка автозапуска для наблюдателя/стабилизатора.
 # Перезапускает целевой скрипт, если тот упал (фатальная ошибка). Выход — по файлу STOP.
 # Если другой экземпляр уже держит наблюдение (мьютекс) — ждёт, не плодит дубли.
 #
@@ -21,6 +21,9 @@ $targetPath = Join-Path $dir $Target
 $argList = @()
 if ($TargetArgs.Trim()) { $argList = $TargetArgs -split '\s+' | Where-Object { $_ } }
 
+$psExe = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
+$procArgs = @('-NoProfile','-ExecutionPolicy','Bypass','-WindowStyle','Hidden','-File',$targetPath) + $argList
+
 function LLog([string]$msg) {
   Add-Content -Path $logFile -Value ((Get-Date -Format 'yyyy-MM-dd HH:mm:ss') + ' launcher: ' + $msg) -Encoding UTF8
 }
@@ -31,10 +34,13 @@ $mutex = New-Object System.Threading.Mutex($false, $MutexName)
 
 while ($true) {
   if (Test-Path $stopFile) { LLog "STOP found, exit"; break }
-  if ($mutex.WaitOne(0)) {
+  $gotMutex = $false
+  try { $gotMutex = $mutex.WaitOne(0) } catch [System.Threading.AbandonedMutexException] { $gotMutex = $true }
+  if ($gotMutex) {
     $mutex.ReleaseMutex()
     try {
-      & $targetPath @argList
+      LLog ("starting $Target with args: " + ($argList -join ' '))
+      Start-Process $psExe -ArgumentList $procArgs -WindowStyle Hidden -Wait
     } catch {
       LLog ("$Target crashed: " + $_.Exception.Message)
     }

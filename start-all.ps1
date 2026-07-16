@@ -17,22 +17,35 @@ function Build-Args([hashtable]$s, [string[]]$switches, [string[]]$values) {
   $parts = @()
   foreach ($sw in $switches) { if ($s[$sw]) { $parts += "-$sw" } }
   foreach ($v in $values) {
-    if ($s.ContainsKey($v) -and $null -ne $s[$v] -and "$($s[$v])" -ne '') {
-      $val = $(if ($s[$v] -is [Array]) { $s[$v] -join ',' } else { $s[$v] })
-      $parts += "-$v $val"
+    if (-not $s.ContainsKey($v) -or $null -eq $s[$v]) { continue }
+    if ($s[$v] -is [Array]) {
+      foreach ($item in $s[$v]) {
+        if ("$item" -ne '') { $parts += "-$v $item" }
+      }
+    } elseif ("$($s[$v])" -ne '') {
+      $parts += "-$v $($s[$v])"
     }
   }
   return ($parts -join ' ')
 }
 
+function Start-Module([string]$target, [string]$mutex, [string]$argsLine) {
+  $procArgs = @(
+    '-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden',
+    '-File', $launcher,
+    '-Target', $target,
+    '-MutexName', $mutex,
+    '-TargetArgs', $argsLine
+  )
+  Start-Process $psExe -WindowStyle Hidden -ArgumentList $procArgs
+}
+
 # 1. наблюдатель апрувов
 $watcherArgs = ''
 if ($cfg -and $cfg.Watcher) {
-  $watcherArgs = Build-Args $cfg.Watcher @('NoKeepAwake','FocusRestore') @('IntervalSeconds','Agents','ApproveKey','ExcludeHwnd')
+  $watcherArgs = Build-Args $cfg.Watcher @('NoKeepAwake','FocusRestore','NoSelfSkip') @('IntervalSeconds','Agents','ApproveKey','ExcludeHwnd')
 }
-Start-Process $psExe -WindowStyle Hidden -ArgumentList (
-  '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "{0}" -Target "{1}" -MutexName "{2}" -TargetArgs "{3}"' -f
-    $launcher, 'watch-approve.ps1', 'Local\KimiApproveWatch', $watcherArgs)
+Start-Module 'watch-approve.ps1' 'Local\KimiApproveWatch' $watcherArgs
 
 # 2. стабилизатор ПК — только если включён файлом stabilizer.enabled
 $stabFlag   = Join-Path $dir 'stabilizer.enabled'
@@ -43,7 +56,5 @@ if ((Test-Path $stabFlag) -and (Test-Path $stabScript)) {
   } else {
     $stabArgs = '-HighPerformance -BoostTerminalPriority'   # умолчания без конфига
   }
-  Start-Process $psExe -WindowStyle Hidden -ArgumentList (
-    '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "{0}" -Target "{1}" -MutexName "{2}" -TargetArgs "{3}"' -f
-      $launcher, 'stabilize.ps1', 'Local\KimiPcStabilizer', $stabArgs)
+  Start-Module 'stabilize.ps1' 'Local\KimiPcStabilizer' $stabArgs
 }

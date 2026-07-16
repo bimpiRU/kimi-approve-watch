@@ -9,6 +9,7 @@
     ExcludeHwnd     = @()         # hwnd окон, которые не трогать: @(3344318)
     NoKeepAwake     = $false      # $true — не блокировать сон
     FocusRestore    = $false    # $true — вернуть фокус прежнему окну (экспериментально)
+    NoSelfSkip      = $false    # $true — апрувить и в окнах, где обсуждается этот бот
   }
 
   Stabilizer = @{

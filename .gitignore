@@ -1,10 +1,14 @@
 # runtime artifacts
 watcher.log
 watcher.pid
-stabilizer.log
+stabilize.log
 stabilizer.pid
 stabilizer.enabled
 STOP
 
 # локальный конфиг пользователя
 kaw.config.psd1
+
+# launcher stdio redirects
+launcher-err.txt
+launcher-out.txt

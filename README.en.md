@@ -1,6 +1,6 @@
 # Kimi Approve Watch
 
-![Version](https://img.shields.io/badge/version-0.2.0-blue)
+![Version](https://img.shields.io/badge/version-0.2.2-blue)
 ![PowerShell](https://img.shields.io/badge/PowerShell-5.1-5391FE?logo=powershell&logoColor=white)
 ![Windows](https://img.shields.io/badge/Windows-10%2F11-0078D6?logo=windows&logoColor=white)
 ![License](https://img.shields.io/badge/license-MIT-green)
@@ -42,6 +42,7 @@ Kimi CLI shows an interactive dialog (`Run this command? 1. Approve once ...`) b
 - **gentle**: restores focus to the window you were working in after each keypress; runs its own process at BelowNormal priority
 - **light**: reads only `TermControl` UI Automation elements (not the whole window tree), inspects only the buffer tail
 - **configurable choice**: `-ApproveKey 1|2|3` picks which dialog option to press (default `1` — approve once)
+- **self-approval**: `-NoSelfSkip` — also approve in the window that is talking about this bot (useful when you manage the watcher from the same session)
 - cleans up the stray character the TUI sometimes leaves in the input line
 - skips minimized windows and any hwnd in `-ExcludeHwnd`
 - agent profiles: `kimi` (default), `claude` (experimental)
@@ -105,6 +106,7 @@ Copy `kaw.config.example.psd1` → `kaw.config.psd1` and edit. The config applie
     ApproveKey      = ''        # '' = 1 (approve once); '1'|'2'|'3' to override
     ExcludeHwnd     = @()       # @(3344318) — never touch these windows
     FocusRestore    = $false    # $true — return focus to previous window (experimental)
+    NoSelfSkip      = $false    # $true — also approve in the window managing this bot
   }
   Stabilizer = @{
     MinFreeRamGB = 1.5; MinFreeDiskGB = 5; WatchDrives = @('C:')
@@ -121,6 +123,23 @@ Direct runs with parameters work too:
 ```
 
 Use `.\kaw.ps1 windows` to find your own window's hwnd and exclude it if you don't want auto-approval in your personal session.
+
+### Personal tabs and self-approval
+
+Tab titles differ for everyone, so exclusions use **hwnd** instead of names:
+
+1. Open the tabs you want to exclude and run `.\kaw.ps1 windows`.
+2. Copy their hwnds into `kaw.config.psd1` → `Watcher.ExcludeHwnd`.
+3. If you manage the watcher from the same session that should receive approvals, set `NoSelfSkip = $true`.
+
+```powershell
+@{
+  Watcher = @{
+    ExcludeHwnd = @(328372, 1377268)   # personal tabs
+    NoSelfSkip  = $true                # approve in the current session too
+  }
+}
+```
 
 ## How it works
 
