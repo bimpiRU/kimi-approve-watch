@@ -48,6 +48,8 @@ param(
   [switch]$NoKeepAwake,
   [switch]$NoNetCheck,
   [switch]$ManageAgentPriority,
+  [switch]$PromptTips,
+  [int]$PromptTipIntervalMinutes = 30,
   [switch]$Once
 )
 
@@ -144,6 +146,32 @@ function Update-AgentPriority {
   try { $newHistory | ConvertTo-Json -Depth 5 | Set-Content -Path $HistoryPath -Encoding UTF8 } catch {}
 }
 
+$script:promptTips = @(
+  'Разбей сложную задачу на шаги: "сначала сделай X, потом Y".'
+  'Добавь контекст: технологии, версии, ограничения проекта.'
+  'Если нужен код — попроси сразу тесты и комментарии.'
+  'Для рефакторинга: "не меняй логику, только формат".'
+  'Укажи критерий готовности: "считай готово, когда ...".'
+  'Если агент застрял — попроси объяснить план перед действиями.'
+  'Используй /doctor или аналогичную команду для проверки перед коммитом.'
+)
+
+function Show-PromptTip {
+  param([string]$Title = 'Kimi Approve Watch')
+  try {
+    Add-Type -AssemblyName System.Windows.Forms -ErrorAction Stop
+    $icon = New-Object System.Windows.Forms.NotifyIcon
+    $icon.Icon = [System.Drawing.SystemIcons]::Information
+    $icon.BalloonTipTitle = $Title
+    $icon.BalloonTipText = $script:promptTips | Get-Random
+    $icon.Visible = $true
+    $icon.ShowBalloonTip(15000)
+    Start-Sleep -Milliseconds 500
+    $icon.Dispose()
+    SLog 'prompt tip shown'
+  } catch { SLog ("prompt tip failed: " + $_.Exception.Message) }
+}
+
 function Test-PendingReboot {
   return (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending') -or
          (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired')
@@ -192,7 +220,7 @@ if ($HighPerformance) {
   }
 }
 
-SLog "stabilizer started (PID $PID)$(if ($Once) {' [ONCE mode]'}), interval ${IntervalSeconds}s, ram<${MinFreeRamGB}GB, disk<${MinFreeDiskGB}GB, drives=[$($WatchDrives -join ',')], hp=$HighPerformance, boost=$BoostTerminalPriority, agents=$ManageAgentPriority, keep-awake=$(-not $NoKeepAwake)"
+SLog "stabilizer started (PID $PID)$(if ($Once) {' [ONCE mode]'}), interval ${IntervalSeconds}s, ram<${MinFreeRamGB}GB, disk<${MinFreeDiskGB}GB, drives=[$($WatchDrives -join ',')], hp=$HighPerformance, boost=$BoostTerminalPriority, agents=$ManageAgentPriority, tips=$PromptTips, keep-awake=$(-not $NoKeepAwake)"
 
 # состояния (логируем переходы, а не каждый тик — лог остаётся чистым)
 $ramBad = $false
@@ -203,6 +231,7 @@ $cpuStreak = 0
 $rebootWarned = $false
 $wtWasRunning = [bool](Get-Process WindowsTerminal -ErrorAction SilentlyContinue)
 $cycle = 0
+$tipCycle = [math]::Max(1, [math]::Round($PromptTipIntervalMinutes * 60 / $IntervalSeconds))
 
 while ($true) {
   if (Test-Path $stopFile) { SLog 'STOP file found, exit'; break }
@@ -280,6 +309,11 @@ while ($true) {
       SLog 'ALERT: WindowsTerminal исчез (падение?) — сессии агентов могли быть потеряны'
     }
     $wtWasRunning = $wtNow
+
+    # --- советы по промтам ---
+    if ($PromptTips -and ($cycle % $tipCycle) -eq 0 -and $cycle -gt 0) {
+      Show-PromptTip
+    }
 
     # --- приоритет терминала ---
     if ($BoostTerminalPriority) {

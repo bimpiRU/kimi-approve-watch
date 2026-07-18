@@ -26,7 +26,7 @@
 # Параметры командной строки важнее значений из конфига.
 # =============================================================================
 param(
-  [int]$IntervalSeconds = 10,
+  [int]$IntervalSeconds = 5,
   [long[]]$ExcludeHwnd = @(),
   [string]$Agents = 'kimi',
   [ValidateSet('','1','2','3')][string]$ApproveKey = '',
@@ -146,11 +146,11 @@ function Send-Key([IntPtr]$h, [string]$keys) {
   [WaApi]::SetForegroundWindow($h) | Out-Null
   [WaApi]::BringWindowToTop($h) | Out-Null
   [WaApi]::AttachThreadInput($myThread, $fgThread, $false) | Out-Null
-  Start-Sleep -Milliseconds 400
+  Start-Sleep -Milliseconds 150
   [System.Windows.Forms.SendKeys]::SendWait($keys)
   # мягкость: вернуть фокус окну, которое было активно до нажатия
   if ($FocusRestore -and $fg -ne [IntPtr]::Zero -and $fg -ne $h) {
-    Start-Sleep -Milliseconds 150
+    Start-Sleep -Milliseconds 100
     [WaApi]::AttachThreadInput($myThread, $fgThread, $true) | Out-Null
     [WaApi]::SetForegroundWindow($fg) | Out-Null
     [WaApi]::AttachThreadInput($myThread, $fgThread, $false) | Out-Null
@@ -225,7 +225,7 @@ while ($true) {
             $attempt++
             Log ("dialog in hwnd " + $h.ToInt64() + " ('" + $info.Title.Trim() + "') — sending '$key' (attempt $attempt)")
             Send-Key $h $key
-            Start-Sleep -Milliseconds 1200
+            Start-Sleep -Milliseconds 600
             $text2 = Get-TermText $h
             if (Has-Dialog $text2 $prof.Dialog) { $text = $text2; continue }
             if (Input-Is-StrayKey $text2 $key) {

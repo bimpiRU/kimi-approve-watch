@@ -1,6 +1,6 @@
 # Kimi Approve Watch
 
-![Version](https://img.shields.io/badge/version-0.2.3-blue)
+![Version](https://img.shields.io/badge/version-0.2.4-blue)
 ![PowerShell](https://img.shields.io/badge/PowerShell-5.1-5391FE?logo=powershell&logoColor=white)
 ![Windows](https://img.shields.io/badge/Windows-10%2F11-0078D6?logo=windows&logoColor=white)
 ![License](https://img.shields.io/badge/license-MIT-green)
@@ -37,7 +37,7 @@ Installs to `%USERPROFILE%\kimi-approve-watch` (via `git clone`, or ZIP if git i
 
 ### Approval watcher — light and gentle
 
-Kimi CLI shows an interactive dialog (`Run this command? 1. Approve once ...`) before risky actions. The watcher scans all Windows Terminal windows every 10 seconds and presses the chosen option for you.
+Kimi CLI shows an interactive dialog (`Run this command? 1. Approve once ...`) before risky actions. The watcher scans all Windows Terminal windows every 5 seconds and presses the chosen option for you.
 
 - **gentle**: restores focus to the window you were working in after each keypress; runs its own process at BelowNormal priority
 - **light**: reads only `TermControl` UI Automation elements (not the whole window tree), inspects only the buffer tail
@@ -53,6 +53,7 @@ Kimi CLI shows an interactive dialog (`Run this command? 1. Approve once ...`) b
 - **High performance** — max power plan while running, previous plan restored on exit
 - **terminal priority** — keeps WindowsTerminal at AboveNormal
 - **inactive agent priority** — `kimi` processes silent for more than 2 hours are automatically downgraded to `BelowNormal` and restored to `Normal` when activity appears (`ManageAgentPriority`)
+- **prompt tips** — every N minutes a balloon tip suggests how to phrase a request to the agent (`PromptTips`, `PromptTipIntervalMinutes`)
 - **RAM** — logs top-5 memory hogs when memory runs low
 - **disk** — low-space alerts (builds eat gigabytes)
 - **network** — records outage windows (AI APIs are unreachable then)
@@ -113,6 +114,8 @@ Copy `kaw.config.example.psd1` → `kaw.config.psd1` and edit. The config applie
     MinFreeRamGB = 1.5; MinFreeDiskGB = 5; WatchDrives = @('C:')
     HighPerformance = $true; BoostTerminalPriority = $true
     ManageAgentPriority = $false   # $true — manage priority of inactive agents
+    PromptTips = $false            # $true — balloon tips with prompt advice
+    PromptTipIntervalMinutes = 30
   }
 }
 ```

@@ -52,7 +52,7 @@ $stabFlag   = Join-Path $dir 'stabilizer.enabled'
 $stabScript = Join-Path $dir 'stabilize.ps1'
 if ((Test-Path $stabFlag) -and (Test-Path $stabScript)) {
   if ($cfg -and $cfg.Stabilizer) {
-    $stabArgs = Build-Args $cfg.Stabilizer @('HighPerformance','BoostTerminalPriority','NoKeepAwake','NoNetCheck','ManageAgentPriority') @('IntervalSeconds','MinFreeRamGB','MinFreeDiskGB','WatchDrives')
+    $stabArgs = Build-Args $cfg.Stabilizer @('HighPerformance','BoostTerminalPriority','NoKeepAwake','NoNetCheck','ManageAgentPriority','PromptTips') @('IntervalSeconds','MinFreeRamGB','MinFreeDiskGB','WatchDrives','PromptTipIntervalMinutes')
   } else {
     $stabArgs = '-HighPerformance -BoostTerminalPriority'   # умолчания без конфига
   }

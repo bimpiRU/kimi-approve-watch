@@ -3,13 +3,13 @@
   # Параметры командной строки всегда важнее значений из конфига.
 
   Watcher = @{
-    IntervalSeconds = 10          # период сканирования окон, сек
+    IntervalSeconds = 5           # период сканирования окон, сек
     Agents          = 'kimi'      # профили агентов через запятую: kimi, claude
     ApproveKey      = ''          # '' = апрув по умолчанию ('1'); '1'|'2'|'3' — свой вариант
     ExcludeHwnd     = @()         # hwnd окон, которые не трогать: @(3344318)
     NoKeepAwake     = $false      # $true — не блокировать сон
-    FocusRestore    = $false    # $true — вернуть фокус прежнему окну (экспериментально)
-    NoSelfSkip      = $false    # $true — апрувить и в окнах, где обсуждается этот бот
+    FocusRestore    = $false      # $true — вернуть фокус прежнему окну (экспериментально)
+    NoSelfSkip      = $false      # $true — апрувить и в окнах, где обсуждается этот бот
   }
 
   Stabilizer = @{
@@ -22,5 +22,7 @@
     NoKeepAwake           = $false
     NoNetCheck            = $false
     ManageAgentPriority   = $false   # $true — понижать приоритет агентам Kimi, неактивным >2 ч
+    PromptTips            = $false   # $true — всплывающие советы по промтам
+    PromptTipIntervalMinutes = 30
   }
 }
