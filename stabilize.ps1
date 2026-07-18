@@ -1,4 +1,4 @@
-﻿#Requires -Version 5.1
+#Requires -Version 5.1
 <#
 .SYNOPSIS
   stabilize.ps1 — стабилизатор ПК на время долгой работы агентов в терминалах.
@@ -47,6 +47,7 @@ param(
   [switch]$BoostTerminalPriority,
   [switch]$NoKeepAwake,
   [switch]$NoNetCheck,
+  [switch]$ManageAgentPriority,
   [switch]$Once
 )
 
@@ -55,6 +56,7 @@ $dir      = Split-Path -Parent $MyInvocation.MyCommand.Path
 $stopFile = Join-Path $dir 'STOP'
 $logFile  = Join-Path $dir 'stabilizer.log'
 $pidFile  = Join-Path $dir 'stabilizer.pid'
+$agentHistoryFile = Join-Path $dir 'agent-cpu.history.json'
 
 $PID | Out-File -FilePath $pidFile -Encoding ascii
 
@@ -78,6 +80,68 @@ function SLog([string]$msg) {
 function Get-TopHogs {
   return (Get-Process | Sort-Object WorkingSet64 -Descending | Select-Object -First 5 |
     ForEach-Object { '{0}={1:N1}GB' -f $_.ProcessName, ($_.WorkingSet64 / 1GB) }) -join ', '
+}
+
+function Update-AgentPriority {
+  param(
+    [string]$HistoryPath,
+    [int]$WindowMinutes = 120,
+    [double]$InactiveCpuSec = 5,
+    [double]$ActiveCpuSec = 1
+  )
+  Add-Type -TypeDefinition @'
+  using System; using System.Runtime.InteropServices;
+  public class AgApi {
+    [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
+  }
+'@ -ErrorAction SilentlyContinue
+  $fgHwnd = [AgApi]::GetForegroundWindow()
+  $fgPid = 0
+  [AgApi]::GetWindowThreadProcessId($fgHwnd, [ref]$fgPid) | Out-Null
+
+  $history = @{}
+  if (Test-Path $HistoryPath) {
+    try {
+      $raw = Get-Content $HistoryPath -Raw | ConvertFrom-Json
+      foreach ($k in $raw.PSObject.Properties.Name) { $history[$k] = @{ samples = @($raw.$k.samples) } }
+    } catch {}
+  }
+
+  $now = Get-Date
+  $agents = Get-Process kimi -ErrorAction SilentlyContinue
+  $newHistory = @{}
+
+  foreach ($agent in $agents) {
+    $id = $agent.Id.ToString()
+    $cpu = $agent.TotalProcessorTime.TotalSeconds
+    $samples = @()
+    if ($history.ContainsKey($id) -and $history[$id].samples) {
+      $samples = @($history[$id].samples | Where-Object { ($now - [datetime]$_.time).TotalMinutes -le ($WindowMinutes + 5) })
+    }
+    $samples += [PSCustomObject]@{ time = $now.ToString('o'); cpu = $cpu }
+    if ($samples.Count -gt 60) { $samples = $samples | Select-Object -Last 60 }
+    $newHistory[$id] = @{ samples = $samples }
+
+    if ($agent.Id -eq $fgPid) { continue }
+    if ($samples.Count -lt 2) { continue }
+
+    $oldest = $samples | Select-Object -First 1
+    $latest = $samples | Select-Object -Last 1
+    $prev   = $samples | Select-Object -Last 2 | Select-Object -First 1
+    $windowCpuDelta = $latest.cpu - $oldest.cpu
+    $windowMin = ($now - [datetime]$oldest.time).TotalMinutes
+    $instantDelta = $latest.cpu - $prev.cpu
+    $currentPrio = try { $agent.PriorityClass } catch { 'Unknown' }
+
+    if ($windowMin -ge $WindowMinutes -and $windowCpuDelta -lt $InactiveCpuSec -and $currentPrio -ne 'BelowNormal' -and $currentPrio -ne 'Idle') {
+      try { $agent.PriorityClass = 'BelowNormal'; SLog "agent PID $($agent.Id) inactive $([int]$windowMin) min (cpu +$($windowCpuDelta.ToString('F1'))s) -> BelowNormal" } catch {}
+    } elseif ($instantDelta -ge $ActiveCpuSec -and ($currentPrio -eq 'BelowNormal' -or $currentPrio -eq 'Idle')) {
+      try { $agent.PriorityClass = 'Normal'; SLog "agent PID $($agent.Id) active (cpu +$($instantDelta.ToString('F1'))s) -> Normal" } catch {}
+    }
+  }
+
+  try { $newHistory | ConvertTo-Json -Depth 5 | Set-Content -Path $HistoryPath -Encoding UTF8 } catch {}
 }
 
 function Test-PendingReboot {
@@ -128,7 +192,7 @@ if ($HighPerformance) {
   }
 }
 
-SLog "stabilizer started (PID $PID)$(if ($Once) {' [ONCE mode]'}), interval ${IntervalSeconds}s, ram<${MinFreeRamGB}GB, disk<${MinFreeDiskGB}GB, drives=[$($WatchDrives -join ',')], hp=$HighPerformance, boost=$BoostTerminalPriority, keep-awake=$(-not $NoKeepAwake)"
+SLog "stabilizer started (PID $PID)$(if ($Once) {' [ONCE mode]'}), interval ${IntervalSeconds}s, ram<${MinFreeRamGB}GB, disk<${MinFreeDiskGB}GB, drives=[$($WatchDrives -join ',')], hp=$HighPerformance, boost=$BoostTerminalPriority, agents=$ManageAgentPriority, keep-awake=$(-not $NoKeepAwake)"
 
 # состояния (логируем переходы, а не каждый тик — лог остаётся чистым)
 $ramBad = $false
@@ -224,6 +288,11 @@ while ($true) {
         ForEach-Object {
           try { $_.PriorityClass = 'AboveNormal'; SLog "boosted WindowsTerminal PID $($_.Id) -> AboveNormal" } catch {}
         }
+    }
+
+    # --- приоритет неактивных агентов ---
+    if ($ManageAgentPriority) {
+      Update-AgentPriority -HistoryPath $agentHistoryFile
     }
   } catch {
     SLog ("cycle error: " + $_.Exception.Message)

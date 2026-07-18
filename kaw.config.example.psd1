@@ -21,5 +21,6 @@
     BoostTerminalPriority = $true
     NoKeepAwake           = $false
     NoNetCheck            = $false
+    ManageAgentPriority   = $false   # $true — понижать приоритет агентам Kimi, неактивным >2 ч
   }
 }

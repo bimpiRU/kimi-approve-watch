@@ -2,8 +2,10 @@
 watcher.log
 watcher.pid
 stabilize.log
+stabilizer.log
 stabilizer.pid
 stabilizer.enabled
+agent-cpu.history.json
 STOP
 
 # локальный конфиг пользователя

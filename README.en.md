@@ -1,6 +1,6 @@
 # Kimi Approve Watch
 
-![Version](https://img.shields.io/badge/version-0.2.2-blue)
+![Version](https://img.shields.io/badge/version-0.2.3-blue)
 ![PowerShell](https://img.shields.io/badge/PowerShell-5.1-5391FE?logo=powershell&logoColor=white)
 ![Windows](https://img.shields.io/badge/Windows-10%2F11-0078D6?logo=windows&logoColor=white)
 ![License](https://img.shields.io/badge/license-MIT-green)
@@ -52,6 +52,7 @@ Kimi CLI shows an interactive dialog (`Run this command? 1. Approve once ...`) b
 - **keep-awake** — no sleep, no display timeout
 - **High performance** — max power plan while running, previous plan restored on exit
 - **terminal priority** — keeps WindowsTerminal at AboveNormal
+- **inactive agent priority** — `kimi` processes silent for more than 2 hours are automatically downgraded to `BelowNormal` and restored to `Normal` when activity appears (`ManageAgentPriority`)
 - **RAM** — logs top-5 memory hogs when memory runs low
 - **disk** — low-space alerts (builds eat gigabytes)
 - **network** — records outage windows (AI APIs are unreachable then)
@@ -111,6 +112,7 @@ Copy `kaw.config.example.psd1` → `kaw.config.psd1` and edit. The config applie
   Stabilizer = @{
     MinFreeRamGB = 1.5; MinFreeDiskGB = 5; WatchDrives = @('C:')
     HighPerformance = $true; BoostTerminalPriority = $true
+    ManageAgentPriority = $false   # $true — manage priority of inactive agents
   }
 }
 ```
