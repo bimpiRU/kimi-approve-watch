@@ -1,4 +1,4 @@
-﻿#Requires -Version 5.1
+#Requires -Version 5.1
 <#
 .SYNOPSIS
   kaw.ps1 — единая точка управления Kimi Approve Watch.
@@ -22,7 +22,7 @@ param(
     [Parameter(Position = 1)][string]$Arg1 = ''
 )
 $ErrorActionPreference = 'Continue'
-$script:KawVersion = '0.2.0'
+$script:KawVersion = '0.3.0'
 $dir   = Split-Path -Parent $MyInvocation.MyCommand.Path
 $psExe = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
 

@@ -1,6 +1,6 @@
 # Kimi Approve Watch
 
-![Version](https://img.shields.io/badge/version-0.2.4-blue)
+![Version](https://img.shields.io/badge/version-0.3.0-blue)
 ![PowerShell](https://img.shields.io/badge/PowerShell-5.1-5391FE?logo=powershell&logoColor=white)
 ![Windows](https://img.shields.io/badge/Windows-10%2F11-0078D6?logo=windows&logoColor=white)
 ![License](https://img.shields.io/badge/license-MIT-green)
@@ -35,17 +35,18 @@ Installs to `%USERPROFILE%\kimi-approve-watch` (via `git clone`, or ZIP if git i
 
 ## What it does
 
-### Approval watcher — light and gentle
+### Approval watcher — fast and gentle
 
 Kimi CLI shows an interactive dialog (`Run this command? 1. Approve once ...`) before risky actions. The watcher scans all Windows Terminal windows every 5 seconds and presses the chosen option for you.
 
+- **fast**: `FastMode` lowers delays; `-ApproveKey auto` finds the "Approve once" option number from the dialog text
 - **gentle**: restores focus to the window you were working in after each keypress; runs its own process at BelowNormal priority
 - **light**: reads only `TermControl` UI Automation elements (not the whole window tree), inspects only the buffer tail
-- **configurable choice**: `-ApproveKey 1|2|3` picks which dialog option to press (default `1` — approve once)
-- **self-approval**: `-NoSelfSkip` — also approve in the window that is talking about this bot (useful when you manage the watcher from the same session)
+- **configurable choice**: `-ApproveKey 1|2|3|auto` picks which dialog option to press (default `1` — approve once)
+- **self-approval**: `-AutoApproveSelf` — approve in the watcher window itself (main terminal); `-NoSelfSkip` — also approve in the window that is talking about this bot
 - cleans up the stray character the TUI sometimes leaves in the input line
 - skips minimized windows and any hwnd in `-ExcludeHwnd`
-- agent profiles: `kimi` (default), `claude` (experimental)
+- agent profiles: `kimi` (default), `claude` (experimental), `generic` (any similar dialog)
 
 ### PC stabilizer
 
@@ -53,7 +54,9 @@ Kimi CLI shows an interactive dialog (`Run this command? 1. Approve once ...`) b
 - **High performance** — max power plan while running, previous plan restored on exit
 - **terminal priority** — keeps WindowsTerminal at AboveNormal
 - **inactive agent priority** — `kimi` processes silent for more than 2 hours are automatically downgraded to `BelowNormal` and restored to `Normal` when activity appears (`ManageAgentPriority`)
-- **prompt tips** — every N minutes a balloon tip suggests how to phrase a request to the agent (`PromptTips`, `PromptTipIntervalMinutes`)
+- **prompt tips** — every N minutes a cross-platform notification suggests how to phrase a request to the agent (`PromptTips`, `PromptTipIntervalMinutes`)
+- **quiet hours** — `QuietHours = "23-07"` disables notifications at night
+- **auto temp cleanup** — cleans `%TEMP%` when disk space is low (`AutoCleanTemp`)
 - **RAM** — logs top-5 memory hogs when memory runs low
 - **disk** — low-space alerts (builds eat gigabytes)
 - **network** — records outage windows (AI APIs are unreachable then)
@@ -63,6 +66,7 @@ Kimi CLI shows an interactive dialog (`Run this command? 1. Approve once ...`) b
 ### Reliability
 
 - **logon gate** — nothing runs until you click "Yes" after signing in
+- **background service** — `install-service.ps1` starts a runner at boot, but watcher/stabilizer start only after you confirm at logon
 - **no duplicates** — mutexes prevent double starts
 - **self-healing** — the launcher restarts a crashed module
 - event-only logs, no spam
@@ -78,6 +82,7 @@ Kimi CLI shows an interactive dialog (`Run this command? 1. Approve once ...`) b
 | `gate` | Confirmation dialog at logon — starts only after "Yes" | Yes (UAC at install) |
 | `startup` | Silent shortcut in the Startup folder | No |
 | `none` | No autostart, just run now | No |
+| `service` | `install-service.ps1` — background runner before logon + confirmation at logon | Yes |
 
 ## Management — `kaw.ps1`
 
@@ -103,19 +108,23 @@ Copy `kaw.config.example.psd1` → `kaw.config.psd1` and edit. The config applie
 ```powershell
 @{
   Watcher = @{
-    IntervalSeconds = 10        # scan period
-    Agents          = 'kimi'    # 'kimi' or 'kimi,claude'
-    ApproveKey      = ''        # '' = 1 (approve once); '1'|'2'|'3' to override
-    ExcludeHwnd     = @()       # @(3344318) — never touch these windows
-    FocusRestore    = $false    # $true — return focus to previous window (experimental)
-    NoSelfSkip      = $false    # $true — also approve in the window managing this bot
+    IntervalSeconds = 5           # scan period
+    Agents          = 'kimi'      # 'kimi' or 'kimi,claude,generic'
+    ApproveKey      = ''          # '' = 1 (approve once); '1'|'2'|'3' override; 'auto'
+    ExcludeHwnd     = @()         # @(3344318) — never touch these windows
+    FocusRestore    = $false      # $true — return focus to previous window (experimental)
+    NoSelfSkip      = $true       # $true — also approve in the window managing this bot
+    AutoApproveSelf = $true       # $true — approve in the watcher window itself
+    FastMode        = $true       # $true — faster, slightly more CPU
   }
   Stabilizer = @{
     MinFreeRamGB = 1.5; MinFreeDiskGB = 5; WatchDrives = @('C:')
     HighPerformance = $true; BoostTerminalPriority = $true
     ManageAgentPriority = $false   # $true — manage priority of inactive agents
-    PromptTips = $false            # $true — balloon tips with prompt advice
+    PromptTips = $false            # $true — prompt-advice notifications
     PromptTipIntervalMinutes = 30
+    AutoCleanTemp = $false         # $true — clean %TEMP% when disk is low
+    QuietHours = ''                # "23-07" — silent period
   }
 }
 ```
@@ -123,8 +132,8 @@ Copy `kaw.config.example.psd1` → `kaw.config.psd1` and edit. The config applie
 Direct runs with parameters work too:
 
 ```powershell
-.\watch-approve.ps1 -IntervalSeconds 5 -ApproveKey 1 -ExcludeHwnd 3344318 -Once
-.\stabilize.ps1 -MinFreeRamGB 2 -WatchDrives 'C:','D:' -Once
+.\watch-approve.ps1 -IntervalSeconds 5 -ApproveKey auto -ExcludeHwnd 3344318 -FastMode -Once
+.\stabilize.ps1 -MinFreeRamGB 2 -WatchDrives 'C:','D:' -AutoCleanTemp -Once
 ```
 
 Use `.\kaw.ps1 windows` to find your own window's hwnd and exclude it if you don't want auto-approval in your personal session.
@@ -135,13 +144,14 @@ Tab titles differ for everyone, so exclusions use **hwnd** instead of names:
 
 1. Open the tabs you want to exclude and run `.\kaw.ps1 windows`.
 2. Copy their hwnds into `kaw.config.psd1` → `Watcher.ExcludeHwnd`.
-3. If you manage the watcher from the same session that should receive approvals, set `NoSelfSkip = $true`.
+3. If you want approvals in the watcher session too, set `NoSelfSkip = $true` and `AutoApproveSelf = $true`.
 
 ```powershell
 @{
   Watcher = @{
-    ExcludeHwnd = @(328372, 1377268)   # personal tabs
-    NoSelfSkip  = $true                # approve in the current session too
+    ExcludeHwnd   = @(328372, 1377268)   # personal tabs
+    NoSelfSkip    = $true                # approve in windows that mention this bot
+    AutoApproveSelf = $true              # approve in the watcher window itself
   }
 }
 ```
@@ -154,9 +164,11 @@ Tab titles differ for everyone, so exclusions use **hwnd** instead of names:
 4. A stray character left in the input line is removed with Backspace.
 5. Meanwhile the stabilizer polls CIM (RAM/disk/CPU), pings the network, checks the registry for pending reboots — and logs only state transitions.
 
-## Why not a Windows service?
+## Why not a classic Windows service?
 
-Services live in session 0 and **cannot see user windows** — UI Automation and SendKeys are useless there. Everything runs in the interactive session instead: a scheduled task at logon (`gate` mode, with confirmation) or the Startup folder (`startup` mode). Safer, too: without your sign-in and "Yes", auto-approval stays silent.
+Classic services live in session 0 and **cannot see user windows** — UI Automation and SendKeys are useless there. The default modes use an interactive scheduled task at logon (`gate`) or the Startup folder (`startup`).
+
+For users who want a background runner before logon, `install-service.ps1` creates `KAWService` (runs at boot) and `KAWGate` (confirmation at logon). The runner waits for a signal and only after your "Yes" starts watcher and stabilizer in the interactive session.
 
 ## Files
 
@@ -164,16 +176,17 @@ Services live in session 0 and **cannot see user windows** — UI Automation and
 |---|---|
 | `kaw.ps1` | Single management command (start/stop/status/log/config/...) |
 | `watch-approve.ps1` | Approval core: agent profiles, key choice, focus restore |
-| `stabilize.ps1` | Stabilizer: power plan, RAM/disk/network/CPU, alerts |
+| `stabilize.ps1` | Stabilizer: power plan, RAM/disk/network/CPU, alerts, notifications |
 | `watch-approve-launcher.ps1` | Restarts crashed modules, no duplicates |
 | `start-all.ps1` | Entry point for both modules (args from config) |
 | `watcher-gate.ps1` | Logon confirmation dialog |
-| `install.ps1` / `uninstall.ps1` | Autostart setup / removal |
+| `service-runner.ps1` | Background runner for `service` mode |
+| `install.ps1` / `install-service.ps1` / `uninstall.ps1` | Autostart setup / removal |
 | `quickstart.ps1` / `quickstart.sh` | One-liner bootstrap (PowerShell / bash) |
 | `kaw.config.example.psd1` | Config template |
 | `stop-watcher.ps1`, `status.ps1`, `show-windows.ps1` | Utility scripts |
 
-Runtime files (`*.log`, `*.pid`, `STOP`, `stabilizer.enabled`, `kaw.config.psd1`) are git-ignored.
+Runtime files (`*.log`, `*.pid`, `STOP`, `stabilizer.enabled`, `kaw.config.psd1`, `.service-go`) are git-ignored.
 
 ## Security
 

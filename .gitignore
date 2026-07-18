@@ -7,6 +7,8 @@ stabilizer.pid
 stabilizer.enabled
 agent-cpu.history.json
 STOP
+.service-go
+service.log
 
 # локальный конфиг пользователя
 kaw.config.psd1

@@ -43,7 +43,7 @@ function Start-Module([string]$target, [string]$mutex, [string]$argsLine) {
 # 1. наблюдатель апрувов
 $watcherArgs = ''
 if ($cfg -and $cfg.Watcher) {
-  $watcherArgs = Build-Args $cfg.Watcher @('NoKeepAwake','FocusRestore','NoSelfSkip') @('IntervalSeconds','Agents','ApproveKey','ExcludeHwnd')
+  $watcherArgs = Build-Args $cfg.Watcher @('NoKeepAwake','FocusRestore','NoSelfSkip','AutoApproveSelf','FastMode') @('IntervalSeconds','Agents','ApproveKey','ExcludeHwnd')
 }
 Start-Module 'watch-approve.ps1' 'Local\KimiApproveWatch' $watcherArgs
 
@@ -52,7 +52,7 @@ $stabFlag   = Join-Path $dir 'stabilizer.enabled'
 $stabScript = Join-Path $dir 'stabilize.ps1'
 if ((Test-Path $stabFlag) -and (Test-Path $stabScript)) {
   if ($cfg -and $cfg.Stabilizer) {
-    $stabArgs = Build-Args $cfg.Stabilizer @('HighPerformance','BoostTerminalPriority','NoKeepAwake','NoNetCheck','ManageAgentPriority','PromptTips') @('IntervalSeconds','MinFreeRamGB','MinFreeDiskGB','WatchDrives','PromptTipIntervalMinutes')
+    $stabArgs = Build-Args $cfg.Stabilizer @('HighPerformance','BoostTerminalPriority','NoKeepAwake','NoNetCheck','ManageAgentPriority','PromptTips','AutoCleanTemp') @('IntervalSeconds','MinFreeRamGB','MinFreeDiskGB','WatchDrives','PromptTipIntervalMinutes','QuietHours')
   } else {
     $stabArgs = '-HighPerformance -BoostTerminalPriority'   # умолчания без конфига
   }

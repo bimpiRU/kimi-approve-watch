@@ -1,4 +1,4 @@
-﻿#Requires -Version 5.1
+#Requires -Version 5.1
 <#
 .SYNOPSIS
   Установка Kimi Approve Watch: автозапуск + старт наблюдателя.
@@ -67,7 +67,7 @@ function Install-StartupLnk {
 if (-not $Mode) {
     Write-Host ''
     Write-Host '  ┌───────────────────────────────┐' -ForegroundColor Cyan
-    Write-Host '  │   Kimi Approve Watch v0.2.0   │' -ForegroundColor Cyan
+    Write-Host '  │   Kimi Approve Watch v0.3.0   │' -ForegroundColor Cyan
     Write-Host '  └───────────────────────────────┘' -ForegroundColor Cyan
     Write-Host ''
     Write-Host '  Режим автозапуска:'

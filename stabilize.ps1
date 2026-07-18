@@ -50,6 +50,8 @@ param(
   [switch]$ManageAgentPriority,
   [switch]$PromptTips,
   [int]$PromptTipIntervalMinutes = 30,
+  [switch]$AutoCleanTemp,
+  [string]$QuietHours = '',  # "23-07" — не показывать уведомления в это время
   [switch]$Once
 )
 
@@ -82,6 +84,36 @@ function SLog([string]$msg) {
 function Get-TopHogs {
   return (Get-Process | Sort-Object WorkingSet64 -Descending | Select-Object -First 5 |
     ForEach-Object { '{0}={1:N1}GB' -f $_.ProcessName, ($_.WorkingSet64 / 1GB) }) -join ', '
+}
+
+function Clear-TempFiles {
+  param([long]$MinBytes = 500MB)
+  $cleared = 0
+  $paths = @($env:TEMP, (Join-Path $env:LOCALAPPDATA 'Temp')) | Select-Object -Unique
+  foreach ($p in $paths) {
+    if (-not (Test-Path $p)) { continue }
+    try {
+      Get-ChildItem $p -Recurse -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.LastAccessTime -lt (Get-Date).AddDays(-1) } |
+        ForEach-Object {
+          try { Remove-Item $_.FullName -Force -ErrorAction SilentlyContinue; $cleared += $_.Length } catch {}
+        }
+    } catch {}
+  }
+  if ($cleared -gt 0) { SLog ("auto-cleaned temp: {0:N1} MB" -f ($cleared / 1MB)) }
+}
+
+function Test-QuietHours {
+  param([string]$Range)
+  if ([string]::IsNullOrWhiteSpace($Range)) { return $false }
+  $now = Get-Date
+  $parts = $Range -split '-', 2 | ForEach-Object { $_.Trim() }
+  if ($parts.Count -ne 2) { return $false }
+  if (-not ([int]::TryParse($parts[0], [ref]$null)) -or -not ([int]::TryParse($parts[1], [ref]$null))) { return $false }
+  $start = [int]$parts[0]; $end = [int]$parts[1]
+  $h = $now.Hour
+  if ($start -le $end) { return ($h -ge $start -and $h -lt $end) }
+  return ($h -ge $start -or $h -lt $end)
 }
 
 function Update-AgentPriority {
@@ -154,22 +186,41 @@ $script:promptTips = @(
   'Укажи критерий готовности: "считай готово, когда ...".'
   'Если агент застрял — попроси объяснить план перед действиями.'
   'Используй /doctor или аналогичную команду для проверки перед коммитом.'
+  'Для долгих задач: "работай порциями и сообщай прогресс".'
 )
+
+function Show-CrossPlatformNotification {
+  param(
+    [string]$Title = 'Kimi Approve Watch',
+    [string]$Message,
+    [string]$Icon = 'info'
+  )
+  if ([string]::IsNullOrWhiteSpace($Message)) { return }
+  try {
+    if ($IsWindows -or $env:OS -eq 'Windows_NT') {
+      Add-Type -AssemblyName System.Windows.Forms -ErrorAction Stop
+      $ni = New-Object System.Windows.Forms.NotifyIcon
+      $ni.Icon = [System.Drawing.SystemIcons]::Information
+      $ni.BalloonTipTitle = $Title
+      $ni.BalloonTipText = $Message
+      $ni.Visible = $true
+      $ni.ShowBalloonTip(15000)
+      Start-Sleep -Milliseconds 300
+      $ni.Dispose()
+    } elseif ($IsMacOS) {
+      $script = 'display notification "' + ($Message -replace '"', '\"') + '" with title "' + ($Title -replace '"', '\"') + '"'
+      Start-Process osascript -ArgumentList '-e', $script -NoNewWindow -Wait
+    } elseif ($IsLinux) {
+      Start-Process notify-send -ArgumentList '-i', $Icon, '-t', '15000', $Title, $Message -NoNewWindow -Wait -ErrorAction SilentlyContinue
+    }
+    SLog 'notification shown'
+  } catch { SLog ("notification failed: " + $_.Exception.Message) }
+}
 
 function Show-PromptTip {
   param([string]$Title = 'Kimi Approve Watch')
-  try {
-    Add-Type -AssemblyName System.Windows.Forms -ErrorAction Stop
-    $icon = New-Object System.Windows.Forms.NotifyIcon
-    $icon.Icon = [System.Drawing.SystemIcons]::Information
-    $icon.BalloonTipTitle = $Title
-    $icon.BalloonTipText = $script:promptTips | Get-Random
-    $icon.Visible = $true
-    $icon.ShowBalloonTip(15000)
-    Start-Sleep -Milliseconds 500
-    $icon.Dispose()
-    SLog 'prompt tip shown'
-  } catch { SLog ("prompt tip failed: " + $_.Exception.Message) }
+  $msg = $script:promptTips | Get-Random
+  Show-CrossPlatformNotification -Title $Title -Message $msg
 }
 
 function Test-PendingReboot {
@@ -220,7 +271,7 @@ if ($HighPerformance) {
   }
 }
 
-SLog "stabilizer started (PID $PID)$(if ($Once) {' [ONCE mode]'}), interval ${IntervalSeconds}s, ram<${MinFreeRamGB}GB, disk<${MinFreeDiskGB}GB, drives=[$($WatchDrives -join ',')], hp=$HighPerformance, boost=$BoostTerminalPriority, agents=$ManageAgentPriority, tips=$PromptTips, keep-awake=$(-not $NoKeepAwake)"
+SLog "stabilizer started (PID $PID)$(if ($Once) {' [ONCE mode]'}), interval ${IntervalSeconds}s, ram<${MinFreeRamGB}GB, disk<${MinFreeDiskGB}GB, drives=[$($WatchDrives -join ',')], hp=$HighPerformance, boost=$BoostTerminalPriority, agents=$ManageAgentPriority, tips=$PromptTips, quiet=$QuietHours, clean=$AutoCleanTemp, keep-awake=$(-not $NoKeepAwake)"
 
 # состояния (логируем переходы, а не каждый тик — лог остаётся чистым)
 $ramBad = $false
@@ -260,6 +311,7 @@ while ($true) {
         if (-not $diskBad[$letter]) {
           $diskBad[$letter] = $true
           SLog "LOW DISK ${letter}: ${freeD}GB free — сборки могут упасть"
+          if ($AutoCleanTemp) { Clear-TempFiles }
         }
       } elseif ($diskBad[$letter]) {
         $diskBad[$letter] = $false
@@ -311,7 +363,7 @@ while ($true) {
     $wtWasRunning = $wtNow
 
     # --- советы по промтам ---
-    if ($PromptTips -and ($cycle % $tipCycle) -eq 0 -and $cycle -gt 0) {
+    if ($PromptTips -and ($cycle % $tipCycle) -eq 0 -and $cycle -gt 0 -and -not (Test-QuietHours $QuietHours)) {
       Show-PromptTip
     }
 

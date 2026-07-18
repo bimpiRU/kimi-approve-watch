@@ -23,7 +23,7 @@ if ($env:KAW_MODE) { $Mode = $env:KAW_MODE }
 
 Write-Host ''
 Write-Host '  ┌───────────────────────────────┐' -ForegroundColor Cyan
-Write-Host '  │   Kimi Approve Watch v0.2.0   │' -ForegroundColor Cyan
+Write-Host '  │   Kimi Approve Watch v0.3.0   │' -ForegroundColor Cyan
 Write-Host '  └───────────────────────────────┘' -ForegroundColor Cyan
 Write-Host "  Каталог: $Dir"
 Write-Host ''

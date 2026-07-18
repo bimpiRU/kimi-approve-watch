@@ -29,10 +29,12 @@ param(
   [int]$IntervalSeconds = 5,
   [long[]]$ExcludeHwnd = @(),
   [string]$Agents = 'kimi',
-  [ValidateSet('','1','2','3')][string]$ApproveKey = '',
+  [ValidateSet('','1','2','3','auto')][string]$ApproveKey = '',
   [switch]$NoKeepAwake,
   [switch]$FocusRestore,
   [switch]$NoSelfSkip,
+  [switch]$AutoApproveSelf,
+  [switch]$FastMode,
   [switch]$Once
 )
 
@@ -46,6 +48,28 @@ $PID | Out-File -FilePath $pidFile -Encoding ascii
 
 # мягкость: собственный процесс — с пониженным приоритетом
 try { (Get-Process -Id $PID).PriorityClass = 'BelowNormal' } catch {}
+
+# скорость: уменьшим задержки в FastMode
+$delayFocus = if ($FastMode) { 40 } else { 80 }
+$delayAfterKey = if ($FastMode) { 200 } else { 400 }
+$delayCleanup = if ($FastMode) { 40 } else { 80 }
+
+# автоапрув себя: определяем hwnd собственного консольного окна, если возможно
+$script:selfHwnd = [IntPtr]::Zero
+try {
+  Add-Type -Name ConsoleWin -Namespace Wa -MemberDefinition @'
+    [DllImport("kernel32.dll")] public static extern IntPtr GetConsoleWindow();
+'@ -ErrorAction Stop
+  $script:selfHwnd = [Wa.ConsoleWin]::GetConsoleWindow()
+  while ($script:selfHwnd -ne [IntPtr]::Zero) {
+    $parent = (Get-Process -Id $PID -ErrorAction SilentlyContinue).Parent
+    if (-not $parent -or $parent.Name -notlike '*powershell*') { break }
+    # в launcher ищем реальное окно терминала
+    $wt = Get-Process WindowsTerminal -ErrorAction SilentlyContinue | Where-Object { $_.Id -eq $parent.Id }
+    if ($wt) { $script:selfHwnd = [IntPtr]::Zero; break }
+    break
+  }
+} catch {}
 
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
@@ -146,11 +170,11 @@ function Send-Key([IntPtr]$h, [string]$keys) {
   [WaApi]::SetForegroundWindow($h) | Out-Null
   [WaApi]::BringWindowToTop($h) | Out-Null
   [WaApi]::AttachThreadInput($myThread, $fgThread, $false) | Out-Null
-  Start-Sleep -Milliseconds 150
+  Start-Sleep -Milliseconds $delayFocus
   [System.Windows.Forms.SendKeys]::SendWait($keys)
   # мягкость: вернуть фокус окну, которое было активно до нажатия
   if ($FocusRestore -and $fg -ne [IntPtr]::Zero -and $fg -ne $h) {
-    Start-Sleep -Milliseconds 100
+    Start-Sleep -Milliseconds $delayCleanup
     [WaApi]::AttachThreadInput($myThread, $fgThread, $true) | Out-Null
     [WaApi]::SetForegroundWindow($fg) | Out-Null
     [WaApi]::AttachThreadInput($myThread, $fgThread, $false) | Out-Null
@@ -170,7 +194,7 @@ function Has-Dialog([string]$text, [string[]]$needles) {
 
 function Input-Is-StrayKey([string]$text, [string]$key) {
   $lines = ($text -split "`r?`n") | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' }
-  for ($i = $lines.Count - 1; $i -ge 0; $i--) {
+  for ($i = $lines.Count - 1; $i -ge [math]::Max(0, $lines.Count - 8); $i--) {
     $norm = ($lines[$i] -replace '[^0-9A-Za-zА-Яа-я>]', '')   # срезаем рамку ╭│╯, пробелы, курсор █
     if ($norm -eq ('>' + $key)) { return $true }
     if ($norm.StartsWith('>')) { return $false }  # чужой ввод — не трогаем
@@ -178,12 +202,24 @@ function Input-Is-StrayKey([string]$text, [string]$key) {
   return $false
 }
 
+function Find-DialogKey([string]$text, [string]$defaultKey) {
+  if ($defaultKey -ne 'auto') { return $defaultKey }
+  # пытаемся найти строку с вариантами "1. Approve once" и выбрать "1"
+  $tail = (($text -split "`r?`n") | Select-Object -Last 20) -join "`n"
+  # ищем любую строку вида "N. Approve once" или "N/... choose" и берём N
+  if ($tail -match '(?m)^[^\d]*([1-9])[^\n]*Approve once') { return $Matches[1] }
+  if ($tail -match '(?m)^[^\d]*([1-9])[^\n]*Yes') { return $Matches[1] }
+  if ($tail -match '([1-9])/\d+\s+choose') { return $Matches[1] }
+  return '1'
+}
+
 # Профили агентов: Marker — признак окна агента в буфере (regex, $null = любое окно),
 # Dialog — все строки, которые должны быть в хвосте буфера у активного диалога,
 # Key — какой вариант нажимать (в профилях по умолчанию "1" = одноразовый апрув).
 $profileTable = @{
-  kimi   = @{ Marker = 'kimi-for-coding'; Dialog = @('Approve once', '1/2/3/4 choose'); Key = '1' }
-  claude = @{ Marker = $null;             Dialog = @('Do you want to proceed', '1. Yes'); Key = '1' }
+  kimi   = @{ Marker = 'kimi'; Dialog = @('Approve', 'choose'); Key = '1' }
+  claude = @{ Marker = $null;             Dialog = @('proceed', 'Yes'); Key = '1' }
+  generic = @{ Marker = $null;             Dialog = @('Approve', 'choose'); Key = '1' }
 }
 $activeProfiles = @()
 foreach ($a in ($Agents -split ',')) {
@@ -191,7 +227,8 @@ foreach ($a in ($Agents -split ',')) {
   if ($a -and $profileTable.Contains($a)) { $activeProfiles += $profileTable[$a] }
 }
 if (-not $activeProfiles) { Log "no known agent profiles in -Agents '$Agents', exit"; exit 1 }
-if ($ApproveKey) { foreach ($p in $activeProfiles) { $p.Key = $ApproveKey } }
+if ($ApproveKey -and $ApproveKey -ne 'auto') { foreach ($p in $activeProfiles) { $p.Key = $ApproveKey } }
+if ($ApproveKey -eq 'auto') { foreach ($p in $activeProfiles) { $p.Key = 'auto' } }
 
 # только один экземпляр наблюдателя
 $script:mutex = New-Object System.Threading.Mutex($false, 'Local\KimiApproveWatch')
@@ -202,7 +239,7 @@ if (-not $NoKeepAwake) {
   [WaApi]::SetThreadExecutionState([Convert]::ToUInt32(0x80000003L)) | Out-Null  # ES_CONTINUOUS|ES_SYSTEM_REQUIRED|ES_DISPLAY_REQUIRED
 }
 
-Log "watcher started (PID $PID)$(if ($Once) {' [ONCE mode]'}), interval ${IntervalSeconds}s, keep-awake $(-not $NoKeepAwake), agents=[$Agents], key=$($activeProfiles[0].Key)"
+Log "watcher started (PID $PID)$(if ($Once) {' [ONCE mode]'}), interval ${IntervalSeconds}s, keep-awake $(-not $NoKeepAwake), agents=[$Agents], key=$($activeProfiles[0].Key), fast=$FastMode, self=$AutoApproveSelf"
 
 while ($true) {
   if (Test-Path $stopFile) { Log "STOP file found, exit"; break }
@@ -216,16 +253,18 @@ while ($true) {
         $info = Get-WinInfo $h
         $text = $info.Text
         if ([string]::IsNullOrEmpty($text)) { continue }
-        if ($text -match 'approve-watch' -and -not $NoSelfSkip) { continue }          # сессия, обсуждающая этого бота
+        # автоапрув себя: если включён AutoApproveSelf, не пропускаем собственное окно
+        $isSelf = ($script:selfHwnd -ne [IntPtr]::Zero -and $h -eq $script:selfHwnd)
+        if ($text -match 'approve-watch' -and -not $NoSelfSkip -and -not $isSelf) { continue }
         foreach ($prof in $activeProfiles) {
           if ($prof.Marker -and $text -notmatch $prof.Marker) { continue }   # не окно этого агента
           $attempt = 0
-          $key = $prof.Key
+          $key = Find-DialogKey $text $prof.Key
           while ((Has-Dialog $text $prof.Dialog) -and $attempt -lt 3) {
             $attempt++
             Log ("dialog in hwnd " + $h.ToInt64() + " ('" + $info.Title.Trim() + "') — sending '$key' (attempt $attempt)")
             Send-Key $h $key
-            Start-Sleep -Milliseconds 600
+            Start-Sleep -Milliseconds $delayAfterKey
             $text2 = Get-TermText $h
             if (Has-Dialog $text2 $prof.Dialog) { $text = $text2; continue }
             if (Input-Is-StrayKey $text2 $key) {

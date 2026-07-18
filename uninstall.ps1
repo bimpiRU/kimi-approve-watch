@@ -1,4 +1,4 @@
-﻿#Requires -Version 5.1
+#Requires -Version 5.1
 <#
 .SYNOPSIS
   Полное удаление Kimi Approve Watch: остановка наблюдателя + снятие автозапуска.
@@ -7,6 +7,8 @@ $ErrorActionPreference = 'Continue'
 $dir      = Split-Path -Parent $MyInvocation.MyCommand.Path
 $stopFile = Join-Path $dir 'STOP'
 $taskName = 'KimiApproveWatchGate'
+$serviceTask = 'KAWService'
+$gateTask = 'KAWGate'
 $lnkPath  = Join-Path ([Environment]::GetFolderPath('Startup')) 'KimiApproveWatch.lnk'
 
 # 1. мягкая остановка через STOP (общий для наблюдателя и стабилизатора)
@@ -31,15 +33,17 @@ Remove-Item $stopFile -Force -ErrorAction SilentlyContinue
 
 # 3. снятие автозапуска
 $removed = $false
-try {
-    Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction Stop
-    Write-Host "[OK] Задача '$taskName' удалена." -ForegroundColor Green
-    $removed = $true
-} catch {
-    if (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue) {
-        Write-Host "[!] Не удалось удалить задачу '$taskName' (нужны права администратора)." -ForegroundColor Yellow
-        Write-Host "    Выполните от администратора: Unregister-ScheduledTask -TaskName $taskName -Confirm:`$false"
+foreach ($t in @($taskName, $serviceTask, $gateTask)) {
+  try {
+    if (Get-ScheduledTask -TaskName $t -ErrorAction SilentlyContinue) {
+      Unregister-ScheduledTask -TaskName $t -Confirm:$false -ErrorAction Stop
+      Write-Host "[OK] Задача '$t' удалена." -ForegroundColor Green
+      $removed = $true
     }
+  } catch {
+    Write-Host "[!] Не удалось удалить задачу '$t' (нужны права администратора)." -ForegroundColor Yellow
+    Write-Host "    Выполните от администратора: Unregister-ScheduledTask -TaskName $t -Confirm:`$false"
+  }
 }
 if (Test-Path $lnkPath) {
     Remove-Item $lnkPath -Force
