@@ -7,6 +7,8 @@
 #   prune [минут=30]          — убить зависшие запуски, снять локи, почистить логи старше 7 дней
 #   gh status|prs|issues      — обзор репозиториев из repos.psd1
 #   gh clone <repo>           — клонировать bimpiRU/<repo> в github_publish
+#   ui [here]                 — дашборд (тема: theme.psd1); here = в текущем окне
+#   do [имя]                  — пользовательские команды из commands.psd1
 #   kaw <команда>             — проброс в kaw.ps1
 param(
     [Parameter(Position = 0)][string]$Command = 'help',
@@ -214,6 +216,27 @@ switch ($Command) {
     }
     'prune'    { Invoke-Prune -OlderThanMin $(if ($Arg1) { [int]$Arg1 } else { 30 }) }
     'gh'       { Invoke-Gh -Sub $Arg1 -Name $Arg2 }
+    'ui'       {
+        $ui = Join-Path $HubDir 'hub-ui.ps1'
+        if ($Arg1 -eq 'here') { & powershell -NoProfile -ExecutionPolicy Bypass -File $ui }
+        else {
+            $wt = Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps\wt.exe'
+            Start-Process $wt -ArgumentList '-w', 'new', '-d', $KawDir, 'powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $ui
+            Write-Host 'Дашборд открыт в новом окне терминала.' -ForegroundColor Green
+        }
+    }
+    'do'       {
+        $cmds = Import-PowerShellDataFile (Join-Path $HubDir 'commands.psd1')
+        if (-not $Arg1) {
+            Write-Host 'Пользовательские команды (hub\commands.psd1):' -ForegroundColor Cyan
+            foreach ($k in $cmds.Keys) { Write-Host ("  {0,-16} {1}" -f $k, $cmds[$k].Desc) }
+        }
+        elseif ($cmds.Contains($Arg1)) {
+            $line = $cmds[$Arg1].Run -replace '\{KAW\}', [regex]::Escape($KawDir).Replace('\\', '\')
+            & cmd /c $line
+        }
+        else { Write-Host "Нет команды '$Arg1'. Список: hub.ps1 do" -ForegroundColor Red }
+    }
     'kaw'      { & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $KawDir 'kaw.ps1') $Arg1 $Arg2 }
     default    { Get-Content $PSCommandPath -TotalCount 11 | Write-Host }
 }
