@@ -8,7 +8,14 @@ const FILE = path.join(DATA_DIR, 'settings.json');
 const DEFAULTS = {
   theme: {
     accent: '#00e5ff', text: '#b8c0cc', ok: '#39ff8e', warn: '#ffd75f',
-    bg: '#050b12', panel: '#0a1420', banner: 'J A R V I S   H U B', refreshSec: 5,
+    bg: '#050b12', panel: '#0a1420', banner: 'J A R V I S   H U B', refreshSec: 5, preset: 'jarvis',
+  },
+  // пресеты тем — редактируются на вкладке «Тема»
+  themes: {
+    jarvis:   { accent: '#00e5ff', text: '#b8c0cc', ok: '#39ff8e', warn: '#ffd75f', bg: '#050b12', panel: '#0a1420' },
+    terminal: { accent: '#e0e0e0', text: '#c8c8c8', ok: '#7ee787', warn: '#e3b341', bg: '#000000', panel: '#0d0d0d' },
+    green:    { accent: '#00ff41', text: '#9fdf9f', ok: '#00ff41', warn: '#e6ff5f', bg: '#020a02', panel: '#041204' },
+    cloud:    { accent: '#4a90d9', text: '#33475b', ok: '#2e9e6b', warn: '#d9962e', bg: '#eef4fb', panel: '#ffffff' },
   },
   agents: {
     sysadmin:   { workdir: 'C:\\Users\\UserBempe', model: '', role: 'Ты — агент системного администрирования Windows (диагностика, драйверы, службы, сеть, электропитание). Действуй автономно, отчитывайся кратко и по делу.' },
@@ -42,6 +49,7 @@ function load() {
   try { stored = JSON.parse(fs.readFileSync(FILE, 'utf8')); } catch {}
   return {
     theme: { ...DEFAULTS.theme, ...(stored.theme || {}) },
+    themes: { ...DEFAULTS.themes, ...(stored.themes || {}) },
     agents: { ...DEFAULTS.agents, ...(stored.agents || {}) }, // новые дефолтные агенты (master) подтягиваются сами
     commands: stored.commands || DEFAULTS.commands,
     repos: stored.repos || DEFAULTS.repos,

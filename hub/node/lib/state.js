@@ -74,6 +74,7 @@ function runStates() {
 }
 
 let reposCache = null, reposCacheAt = 0;
+function bustReposCache() { reposCacheAt = 0; }
 function repoStates(repos) {
   if (reposCache && Date.now() - reposCacheAt < 30000) return reposCache;
   const git = (cwd, args) => { try { return execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true }).trim(); } catch { return ''; } };
@@ -106,6 +107,7 @@ function getState(settings) {
   return {
     time: fmtTime(),
     theme: settings.theme,
+    themes: settings.themes || {},
     kaw: { watcher: svcState('watcher'), stabilizer: svcState('stabilizer') },
     system: {
       cpu: cpu === null ? '…' : cpu,
@@ -122,4 +124,4 @@ function getState(settings) {
   };
 }
 
-module.exports = { getState, HUB_DIR, KAW_DIR, RUNS_DIR };
+module.exports = { getState, bustReposCache, HUB_DIR, KAW_DIR, RUNS_DIR };

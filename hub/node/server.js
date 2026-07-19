@@ -43,6 +43,30 @@ if (!process.env.AGENT_TOKEN) {
   fs.appendFileSync(path.join(__dirname, '.env'), `AGENT_TOKEN=${process.env.AGENT_TOKEN}\n`);
 }
 
+// --- безопасность ---
+const PFX = path.join(__dirname, 'data', 'cert.pfx');
+const HTTPS_PORT = parseInt(process.env.HTTPS_PORT || '8443', 10);
+const httpsEnabled = fs.existsSync(PFX);
+
+function secHeaders(res) {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  res.setHeader('Content-Security-Policy', "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; img-src 'self' data:");
+}
+
+const authAttempts = new Map(); // ip -> {count, reset}
+function bruteForceLimited(req) {
+  const ip = req.socket.remoteAddress || '?';
+  const now = Date.now();
+  let e = authAttempts.get(ip);
+  if (!e || now > e.reset) e = { count: 0, reset: now + 5 * 60 * 1000 };
+  e.count++;
+  authAttempts.set(ip, e);
+  return e.count > 10; // 10 попыток за 5 минут
+}
+const secureCookie = req => (req.socket.encrypted ? '; Secure' : '');
+
 function restartServer() {
   setTimeout(() => {
     // новый экземпляр поднимется рядом, старый уходит; дочерним агентам detached не вредит
@@ -56,6 +80,13 @@ function restartServer() {
 async function handler(req, res) {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const p = url.pathname;
+  secHeaders(res);
+  // есть сертификат — весь HTTP уходит на HTTPS (кроме health для watchdog)
+  if (httpsEnabled && !req.socket.encrypted && p !== '/api/health') {
+    const host = (req.headers.host || 'localhost').split(':')[0];
+    res.writeHead(308, { Location: `https://${host}:${HTTPS_PORT}${url.pathname}${url.search}` });
+    return res.end();
+  }
   try {
     // --- открытые маршруты ---
     if (p === '/api/health') return json(res, 200, { ok: true, ts: Date.now() });
@@ -70,11 +101,12 @@ async function handler(req, res) {
       });
     }
     if (p === '/auth/local' && req.method === 'POST') {
+      if (bruteForceLimited(req)) return text(res, 429, 'слишком много попыток, подожди 5 минут');
       const body = await readBody(req);
       if (auth.verifyUser(body.login, body.password)) {
         const token = auth.createSession(String(body.login).toLowerCase(), 'local');
         res.writeHead(302, {
-          'Set-Cookie': `jh_session=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${7 * 24 * 3600}`,
+          'Set-Cookie': `jh_session=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${7 * 24 * 3600}${secureCookie(req)}`,
           Location: '/',
         });
         return res.end();
@@ -82,11 +114,12 @@ async function handler(req, res) {
       return text(res, 403, 'неверный логин или пароль');
     }
     if (p === '/auth/pin' && req.method === 'POST') {
+      if (bruteForceLimited(req)) return text(res, 429, 'слишком много попыток, подожди 5 минут');
       const body = await readBody(req);
       if (auth.pinEnabled() && body.pin === process.env.AUTH_PIN) {
         const token = auth.createSession('admin (pin)', 'pin');
         res.writeHead(302, {
-          'Set-Cookie': `jh_session=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${7 * 24 * 3600}`,
+          'Set-Cookie': `jh_session=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${7 * 24 * 3600}${secureCookie(req)}`,
           Location: '/',
         });
         return res.end();
@@ -219,6 +252,10 @@ async function handler(req, res) {
       const pid = parseInt(fs.readFileSync(lock, 'utf8'), 10);
       require('child_process').execFile('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true }, () => {});
       fs.rmSync(lock, { force: true });
+      // помечаем активный запуск агента как остановленный
+      const active = fs.readdirSync(RUNS_DIR).filter(f => f.startsWith(`${agent}-`) && f.endsWith('.cmd')
+        && !fs.existsSync(path.join(RUNS_DIR, f.replace(/\.cmd$/, '.exit')))).sort().pop();
+      if (active) fs.writeFileSync(path.join(RUNS_DIR, active.replace(/\.cmd$/, '.exit')), '-2');
       return json(res, 200, { ok: true });
     }
     if (p === '/api/broadcast' && req.method === 'POST') {
@@ -237,6 +274,7 @@ async function handler(req, res) {
       const allowed = ['fetch', 'pull', 'push'];
       if (!allowed.includes(body.action)) return json(res, 400, { ok: false, error: 'действие: fetch|pull|push' });
       require('child_process').execFile('git', ['-C', repo.path, body.action], { windowsHide: true, timeout: 60000 }, (err, stdout, stderr) => {
+        state.bustReposCache();
         json(res, 200, { ok: !err, out: (stdout + stderr).trim().slice(0, 2000) });
       });
       return;
@@ -290,10 +328,8 @@ server.listen(PORT, HOST, () => {
   });
 });
 
-// HTTPS: если есть data/cert.pfx (см. make-cert.ps1) — дополнительно слушаем HTTPS_PORT
-const PFX = path.join(__dirname, 'data', 'cert.pfx');
-const HTTPS_PORT = parseInt(process.env.HTTPS_PORT || '8443', 10);
-if (fs.existsSync(PFX)) {
+// HTTPS: если есть data/cert.pfx (см. make-cert.ps1) — слушаем HTTPS_PORT, HTTP редиректит сюда
+if (httpsEnabled) {
   require('https').createServer(
     { pfx: fs.readFileSync(PFX), passphrase: process.env.CERT_PASS || 'jarvis-hub' },
     handler

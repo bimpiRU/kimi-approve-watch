@@ -104,22 +104,18 @@ const $ = id => document.getElementById(id);
 const overlay = $('overlay');
 let SETTINGS = null, TAB = 'theme', REFRESH = 5000, timer = null, liveRun = null;
 
-/* ---------- темы ---------- */
-const THEMES = {
-  jarvis:   { accent:'#00e5ff', text:'#b8c0cc', ok:'#39ff8e', warn:'#ffd75f', bg:'#050b12', panel:'#0a1420' },
-  terminal: { accent:'#e0e0e0', text:'#c8c8c8', ok:'#7ee787', warn:'#e3b341', bg:'#000000', panel:'#0d0d0d' },
-  green:    { accent:'#00ff41', text:'#9fdf9f', ok:'#00ff41', warn:'#e6ff5f', bg:'#020a02', panel:'#041204' },
-  cloud:    { accent:'#4a90d9', text:'#33475b', ok:'#2e9e6b', warn:'#d9962e', bg:'#eef4fb', panel:'#ffffff' },
-};
+/* ---------- темы (пресеты приходят с сервера в state.themes) ---------- */
+let SERVER_THEMES = {};
 function applyTheme(name) {
-  const t = THEMES[name] || THEMES.jarvis;
+  const t = SERVER_THEMES[name];
+  if (!t) return;
   for (const [k, v] of Object.entries(t)) document.documentElement.style.setProperty('--' + k, v);
 }
 $('themeSel').onchange = async () => {
   const name = $('themeSel').value;
   applyTheme(name);
   const cur = await (await api('/api/settings')).json();
-  await api('/api/settings', { method: 'POST', body: JSON.stringify({ theme: { ...cur.theme, ...THEMES[name] } }) });
+  await api('/api/settings', { method: 'POST', body: JSON.stringify({ theme: { ...cur.theme, ...SERVER_THEMES[name], preset: name } }) });
 };
 
 async function api(path, opts) { const r = await fetch(path, opts); if (r.status === 401) { showLogin(); throw new Error('401'); } return r; }
@@ -157,6 +153,11 @@ async function refresh() {
     const s = await (await api('/api/state')).json();
     const t = s.theme;
     for (const k of ['accent','text','ok','warn','bg','panel']) document.documentElement.style.setProperty('--' + k, t[k]);
+    if (s.themes && Object.keys(s.themes).length && !Object.keys(SERVER_THEMES).length) {
+      SERVER_THEMES = s.themes;
+      $('themeSel').innerHTML = Object.keys(s.themes).map(n => `<option value="${n}">${n}</option>`).join('');
+    }
+    if (t.preset && $('themeSel').value !== t.preset) $('themeSel').value = t.preset;
     if (t.banner && $('banner').textContent !== t.banner) $('banner').textContent = t.banner;
     if (t.refreshSec * 1000 !== REFRESH) { REFRESH = t.refreshSec * 1000; startTimer(); }
     $('clock').textContent = s.time;
@@ -198,7 +199,8 @@ async function refresh() {
       } else if (still) { liveRun = null; }
     }
     if (!$('agent').options.length) {
-      $('agent').innerHTML = '<option value="__all">⬢ всем агентам</option>' + s.agents.map(a => `<option>${a.name}</option>`).join('');
+      $('agent').innerHTML = s.agents.map(a => `<option>${a.name}</option>`).join('');
+      if ([...$('agent').options].some(o => o.value === 'master')) $('agent').value = 'master';
       $('cmds').innerHTML = s.commands.map(c => `<button data-cmd="${c.name}" title="${c.desc}">${c.name}</button>`).join('');
       document.querySelectorAll('[data-cmd]').forEach(b => b.onclick = () => api('/api/cmd', { method: 'POST', body: JSON.stringify({ name: b.dataset.cmd }) }));
     }
@@ -207,16 +209,7 @@ async function refresh() {
 
 $('dispatch').onsubmit = async e => {
   e.preventDefault();
-  const agent = $('agent').value;
-  if (agent === '__all') {
-    const r = await (await api('/api/broadcast', { method: 'POST', body: JSON.stringify({ task: $('task').value }) })).json();
-    const ok = Object.entries(r.results || {}).map(([n, v]) => `${n}:${v.ok ? 'запущен' : v.error}`).join(', ');
-    $('dispatchMsg').textContent = ok;
-    if (r.ok) $('task').value = '';
-    setTimeout(refresh, 500);
-    return;
-  }
-  const r = await (await api('/api/dispatch', { method: 'POST', body: JSON.stringify({ agent, task: $('task').value }) })).json();
+  const r = await (await api('/api/dispatch', { method: 'POST', body: JSON.stringify({ agent: $('agent').value, task: $('task').value }) })).json();
   $('dispatchMsg').textContent = r.ok ? `запущен: ${r.runId}` : `ошибка: ${r.error}`;
   if (r.ok) $('task').value = '';
   setTimeout(refresh, 500);
@@ -259,9 +252,14 @@ function renderTab() {
   const b = $('tabBody');
   if (TAB === 'theme') {
     const t = SETTINGS.theme;
-    b.innerHTML = ['accent','text','ok','warn','bg','panel'].map(k => row(k, `<input type="color" id="th_${k}" value="${t[k]}">`)).join('')
+    b.innerHTML = row('пресет', `<select id="th_preset">${Object.keys(SETTINGS.themes || {}).map(n => `<option ${n === t.preset ? 'selected' : ''}>${n}</option>`).join('')}</select>`)
+      + ['accent','text','ok','warn','bg','panel'].map(k => row(k, `<input type="color" id="th_${k}" value="${t[k]}">`)).join('')
       + row('баннер', `<input class="grow" id="th_banner" value="${esc(t.banner)}">`)
       + row('обновл., сек', `<input id="th_refreshSec" type="number" min="2" max="60" value="${t.refreshSec}">`);
+    $('th_preset').onchange = () => {
+      const p = (SETTINGS.themes || {})[$('th_preset').value];
+      if (p) for (const k of ['accent','text','ok','warn','bg','panel']) $('th_' + k).value = p[k];
+    };
   }
   if (TAB === 'agents') {
     b.innerHTML = `<datalist id="modelList"></datalist>` + Object.entries(SETTINGS.agents).map(([n, a], i) =>
@@ -316,7 +314,9 @@ function renderTab() {
 $('saveSettings').onclick = async () => {
   if (TAB === 'theme') {
     for (const k of ['accent','text','ok','warn','bg','panel']) SETTINGS.theme[k] = $('th_' + k).value;
-    SETTINGS.theme.banner = $('th_banner').value; SETTINGS.theme.refreshSec = +$('th_refreshSec').value || 5;
+    SETTINGS.theme.banner = $('th_banner').value;
+    SETTINGS.theme.refreshSec = +$('th_refreshSec').value || 5;
+    SETTINGS.theme.preset = $('th_preset').value;
   }
   if (TAB === 'agents') document.querySelectorAll('[data-ag]').forEach(i => SETTINGS.agents[i.dataset.ag][i.dataset.f] = i.value);
   if (TAB === 'commands') document.querySelectorAll('[data-cmd-name]').forEach(i => SETTINGS.commands[i.dataset.cmdName][i.dataset.f] = i.value);
