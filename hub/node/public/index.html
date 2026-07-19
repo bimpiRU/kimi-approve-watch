@@ -57,7 +57,11 @@ a { color:var(--accent); }
 <div id="loginBox">
   <h1>ВХОД В JARVIS HUB</h1><br>
   <div id="loginProviders"></div>
-  <div class="dim">Доступ только по allowlist (AUTH_ALLOW)</div>
+  <form id="pinForm" style="display:none;justify-content:center">
+    <input id="pinInput" type="password" placeholder="PIN" autocomplete="current-password">
+    <button type="submit">Войти</button>
+  </form>
+  <div class="dim" id="loginMsg">Доступ только для своих</div>
 </div>
 
 <div class="grid" id="mainGrid">
@@ -91,15 +95,23 @@ async function api(path, opts) { const r = await fetch(path, opts); if (r.status
 
 async function boot() {
   const me = await (await fetch('/api/me')).json();
-  if (me.authRequired && !me.user) return showLogin(me.providers);
+  if (me.authRequired && !me.user) return showLogin(me.providers, me.pin);
   if (me.user) { $('userBadge').textContent = '⬢ ' + me.user + ' '; $('logoutBtn').style.display = ''; }
   refresh(); startTimer();
 }
-function showLogin(providers = []) {
+function showLogin(providers = [], pin = false) {
   $('mainGrid').style.display = 'none';
   $('loginBox').style.display = 'block';
-  $('loginProviders').innerHTML = providers.map(p => `<button onclick="location.href='/auth/${p}'">Войти через ${p === 'github' ? 'GitHub' : 'Google'}</button>`).join('') || '<div class="dim">Провайдеры не настроены</div>';
+  $('loginProviders').innerHTML = providers.map(p => `<button onclick="location.href='/auth/${p}'">Войти через ${p === 'github' ? 'GitHub' : 'Google'}</button>`).join('');
+  if (pin) $('pinForm').style.display = 'flex';
+  if (!pin && !providers.length) $('loginMsg').textContent = 'Провайдеры не настроены';
 }
+$('pinForm').onsubmit = async e => {
+  e.preventDefault();
+  const r = await fetch('/auth/pin', { method: 'POST', body: JSON.stringify({ pin: $('pinInput').value }) });
+  if (r.redirected) return location.href = r.url;
+  $('loginMsg').textContent = 'неверный PIN';
+};
 function startTimer() { clearInterval(timer); timer = setInterval(refresh, REFRESH); }
 
 async function refresh() {
@@ -195,9 +207,9 @@ function renderTab() {
     b.innerHTML = `<div class="dim">Ключи OAuth хранятся в hub/node/.env (не коммитятся). Создай OAuth App:
       <a href="https://github.com/settings/developers" target="_blank">GitHub</a> (callback: <b>${location.origin}/auth/github/callback</b>) и
       <a href="https://console.cloud.google.com/apis/credentials" target="_blank">Google</a> (callback: <b>${location.origin}/auth/google/callback</b>).</div><br>`
-      + ['GITHUB_CLIENT_ID','GITHUB_CLIENT_SECRET','GOOGLE_CLIENT_ID','GOOGLE_CLIENT_SECRET','AUTH_ALLOW','TELEGRAM_BOT_TOKEN','TELEGRAM_CHAT_ID'].map(k =>
-        row(k, `<input class="grow" data-env="${k}" value="" placeholder="${/SECRET|TOKEN/.test(k) ? '••• (пусто = не менять)' : ''}" autocomplete="off">`)).join('')
-      + `<div class="dim">AUTH_ALLOW — логины/почты через запятую. TELEGRAM_BOT_TOKEN — токен от @BotFather; TELEGRAM_CHAT_ID — id твоего чата (напиши боту /start, id появится в консоли сервера). После смены ключей нажми «↻ Перезапуск».</div>`;
+      + ['GITHUB_CLIENT_ID','GITHUB_CLIENT_SECRET','GOOGLE_CLIENT_ID','GOOGLE_CLIENT_SECRET','AUTH_ALLOW','AUTH_PIN','TELEGRAM_BOT_TOKEN','TELEGRAM_CHAT_ID'].map(k =>
+        row(k, `<input class="grow" data-env="${k}" value="" placeholder="${/SECRET|TOKEN|PIN/.test(k) ? '••• (пусто = не менять)' : ''}" autocomplete="off">`)).join('')
+      + `<div class="dim">AUTH_PIN — простой вход по коду (альтернатива OAuth). AUTH_ALLOW — логины/почты через запятую. TELEGRAM_CHAT_ID подставится сам после /start боту. После смены ключей нажми «↻ Перезапуск».</div>`;
   }
 }
 

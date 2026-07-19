@@ -7,6 +7,15 @@ const token = () => process.env.TELEGRAM_BOT_TOKEN || '';
 const chatId = () => process.env.TELEGRAM_CHAT_ID || '';
 const api = () => `https://api.telegram.org/bot${token()}`;
 
+function persistEnv(key, value) {
+  const envFile = path.join(__dirname, '..', '.env');
+  let lines = [];
+  try { lines = fs.readFileSync(envFile, 'utf8').split('\n').filter(l => l.trim() && !l.startsWith('#')); } catch {}
+  const map = new Map(lines.map(l => { const m = l.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*)$/); return m ? [m[1], m[2]] : null; }).filter(Boolean));
+  map.set(key, value);
+  fs.writeFileSync(envFile, [...map].map(([k, v]) => `${k}=${v}`).join('\n') + '\n', 'utf8');
+}
+
 async function send(text, to) {
   const chat = to || chatId();
   if (!token() || !chat) return;
@@ -22,7 +31,12 @@ async function handle(ctx, msg) {
   if (!msg || !msg.text) return;
   const from = String(msg.chat.id);
   if (chatId() && from !== chatId()) return; // чужой чат — молчим
-  if (!chatId()) { console.log(`[telegram] сообщение из чата ${from} — добавь TELEGRAM_CHAT_ID=${from} в .env для доступа`); return; }
+  if (!chatId()) {
+    // авто-привязка: первый написавший становится админом (токен бота и так секрет)
+    process.env.TELEGRAM_CHAT_ID = from;
+    persistEnv('TELEGRAM_CHAT_ID', from);
+    return send(`⬢ Чат ${from} привязан как админский. Управление: /help`, from);
+  }
 
   const [cmd, ...rest] = msg.text.trim().split(/\s+/);
   const arg = rest.join(' ').replace(/^["«]|["»]$/g, '');

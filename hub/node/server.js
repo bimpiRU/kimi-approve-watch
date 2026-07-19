@@ -47,7 +47,7 @@ function restartServer() {
   }, 400);
 }
 
-http.createServer(async (req, res) => {
+async function handler(req, res) {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const p = url.pathname;
   try {
@@ -58,8 +58,21 @@ http.createServer(async (req, res) => {
       return json(res, 200, {
         authRequired: auth.anyConfigured(),
         providers: auth.providers(),
+        pin: auth.pinEnabled(),
         user: s ? s.user : null,
       });
+    }
+    if (p === '/auth/pin' && req.method === 'POST') {
+      const body = await readBody(req);
+      if (auth.pinEnabled() && body.pin === process.env.AUTH_PIN) {
+        const token = auth.createSession('admin (pin)', 'pin');
+        res.writeHead(302, {
+          'Set-Cookie': `jh_session=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${7 * 24 * 3600}`,
+          Location: '/',
+        });
+        return res.end();
+      }
+      return text(res, 403, 'неверный PIN');
     }
     if (p === '/logout') {
       auth.destroySession(req);
@@ -163,7 +176,10 @@ http.createServer(async (req, res) => {
   } catch (e) {
     json(res, 500, { error: e.message });
   }
-}).listen(PORT, HOST, () => {
+}
+
+const server = http.createServer(handler);
+server.listen(PORT, HOST, () => {
   console.log(`Jarvis Hub: http://${HOST}:${PORT}/  (help: /help, auth: ${auth.anyConfigured() ? auth.providers().join('+') : 'off, local mode'})`);
   require('./lib/telegram').start({
     RUNS_DIR,
@@ -173,3 +189,13 @@ http.createServer(async (req, res) => {
     restart: restartServer,
   });
 });
+
+// HTTPS: если есть data/cert.pfx (см. make-cert.ps1) — дополнительно слушаем HTTPS_PORT
+const PFX = path.join(__dirname, 'data', 'cert.pfx');
+const HTTPS_PORT = parseInt(process.env.HTTPS_PORT || '8443', 10);
+if (fs.existsSync(PFX)) {
+  require('https').createServer(
+    { pfx: fs.readFileSync(PFX), passphrase: process.env.CERT_PASS || 'jarvis-hub' },
+    handler
+  ).listen(HTTPS_PORT, HOST, () => console.log(`Jarvis Hub HTTPS: https://${HOST}:${HTTPS_PORT}/`));
+}

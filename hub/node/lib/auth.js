@@ -33,7 +33,8 @@ const allowlist = () =>
   (process.env.AUTH_ALLOW || 'bimpiRU').split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
 
 const configured = p => !!(PROVIDERS[p].id() && PROVIDERS[p].secret());
-const anyConfigured = () => Object.keys(PROVIDERS).some(configured);
+const pinEnabled = () => !!process.env.AUTH_PIN;
+const anyConfigured = () => Object.keys(PROVIDERS).some(configured) || pinEnabled();
 
 // --- сессии ---
 let sessions = new Map();
@@ -108,4 +109,4 @@ async function finishAuth(provider, query, baseUrl) {
   return login;
 }
 
-module.exports = { configured, anyConfigured, providers: () => Object.keys(PROVIDERS).filter(configured), startAuth, finishAuth, createSession, getSession, destroySession };
+module.exports = { configured, anyConfigured, pinEnabled, providers: () => Object.keys(PROVIDERS).filter(configured), startAuth, finishAuth, createSession, getSession, destroySession };
