@@ -118,6 +118,7 @@ function getState(settings) {
     runs: runStates(),
     repos: repoStates(settings.repos),
     commands: Object.entries(settings.commands).map(([name, c]) => ({ name, desc: c.desc })),
+    presets: (settings.presets || []).map(p => ({ name: p.name, agent: p.agent, task: p.task })),
   };
 }
 

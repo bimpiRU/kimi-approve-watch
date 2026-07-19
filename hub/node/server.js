@@ -59,8 +59,21 @@ async function handler(req, res) {
         authRequired: auth.anyConfigured(),
         providers: auth.providers(),
         pin: auth.pinEnabled(),
+        local: auth.localEnabled(),
         user: s ? s.user : null,
       });
+    }
+    if (p === '/auth/local' && req.method === 'POST') {
+      const body = await readBody(req);
+      if (auth.verifyUser(body.login, body.password)) {
+        const token = auth.createSession(String(body.login).toLowerCase(), 'local');
+        res.writeHead(302, {
+          'Set-Cookie': `jh_session=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${7 * 24 * 3600}`,
+          Location: '/',
+        });
+        return res.end();
+      }
+      return text(res, 403, 'неверный логин или пароль');
     }
     if (p === '/auth/pin' && req.method === 'POST') {
       const body = await readBody(req);
@@ -151,6 +164,55 @@ async function handler(req, res) {
       json(res, 200, { ok: true });
       return restartServer();
     }
+    if (p === '/api/users' && req.method === 'POST') {
+      const body = await readBody(req);
+      if (body.action === 'add') return json(res, 200, auth.addUser(body.login, body.password));
+      if (body.action === 'remove') return json(res, 200, auth.removeUser(body.login));
+      return json(res, 200, { ok: true, users: auth.listUsers() });
+    }
+    if (p === '/api/sessions') {
+      // старые сессии kimi из session_index.jsonl, свежие сверху
+      const idx = path.join(process.env.USERPROFILE, '.kimi-code', 'session_index.jsonl');
+      const out = [];
+      try {
+        for (const line of fs.readFileSync(idx, 'utf8').split('\n')) {
+          if (!line.trim()) continue;
+          try {
+            const s = JSON.parse(line);
+            let mtime = 0;
+            try { mtime = fs.statSync(s.sessionDir).mtimeMs; } catch {}
+            out.push({ id: s.sessionId, workDir: s.workDir, mtime });
+          } catch {}
+        }
+      } catch {}
+      out.sort((a, b) => b.mtime - a.mtime);
+      const p2 = n => String(n).padStart(2, '0');
+      return json(res, 200, out.slice(0, 30).map(s => {
+        const d = new Date(s.mtime);
+        return { id: s.id, workDir: s.workDir, when: `${p2(d.getDate())}.${p2(d.getMonth() + 1)} ${p2(d.getHours())}:${p2(d.getMinutes())}` };
+      }));
+    }
+    if (p === '/api/sessions/open' && req.method === 'POST') {
+      const body = await readBody(req);
+      const id = String(body.id || '').replace(/[^\w-]/g, '');
+      const workDir = String(body.workDir || process.env.USERPROFILE);
+      if (!id) return json(res, 400, { ok: false, error: 'нет id' });
+      const kimi = path.join(process.env.USERPROFILE, '.kimi-code', 'bin', 'kimi.exe');
+      const f = path.join(RUNS_DIR, `open-${Date.now()}.cmd`);
+      fs.writeFileSync(f, `@echo off\r\nstart "" wt -w new -d "${workDir}" cmd /k ""${kimi}" -S ${id}"\r\n`, 'ascii');
+      require('child_process').spawn('cmd.exe', ['/c', f], { stdio: 'ignore' }).unref();
+      return json(res, 200, { ok: true });
+    }
+    if (p === '/api/stop' && req.method === 'POST') {
+      const body = await readBody(req);
+      const agent = String(body.agent || '').replace(/[^\w-]/g, '');
+      const lock = path.join(RUNS_DIR, `${agent}.lock`);
+      if (!fs.existsSync(lock)) return json(res, 404, { ok: false, error: 'агент не запущен' });
+      const pid = parseInt(fs.readFileSync(lock, 'utf8'), 10);
+      require('child_process').execFile('taskkill', ['/PID', String(pid), '/T', '/F'], () => {});
+      fs.rmSync(lock, { force: true });
+      return json(res, 200, { ok: true });
+    }
     if (p === '/api/settings') {
       if (req.method === 'GET') return json(res, 200, settings);
       if (req.method === 'POST') {
@@ -183,6 +245,7 @@ server.listen(PORT, HOST, () => {
   console.log(`Jarvis Hub: http://${HOST}:${PORT}/  (help: /help, auth: ${auth.anyConfigured() ? auth.providers().join('+') : 'off, local mode'})`);
   require('./lib/telegram').start({
     RUNS_DIR,
+    settings: () => settings,
     state: () => state.getState(settings),
     dispatch: (agent, task) => disp.dispatch(settings, RUNS_DIR, agent, task),
     prune: () => disp.prune(RUNS_DIR, 30),

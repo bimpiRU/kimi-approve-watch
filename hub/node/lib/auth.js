@@ -34,7 +34,7 @@ const allowlist = () =>
 
 const configured = p => !!(PROVIDERS[p].id() && PROVIDERS[p].secret());
 const pinEnabled = () => !!process.env.AUTH_PIN;
-const anyConfigured = () => Object.keys(PROVIDERS).some(configured) || pinEnabled();
+const anyConfigured = () => Object.keys(PROVIDERS).some(configured) || pinEnabled() || Object.keys(users).length > 0;
 
 // --- сессии ---
 let sessions = new Map();
@@ -109,4 +109,37 @@ async function finishAuth(provider, query, baseUrl) {
   return login;
 }
 
-module.exports = { configured, anyConfigured, pinEnabled, providers: () => Object.keys(PROVIDERS).filter(configured), startAuth, finishAuth, createSession, getSession, destroySession };
+// --- локальные логины/пароли (data/users.json, scrypt) ---
+const USERS_FILE = path.join(DATA_DIR, 'users.json');
+let users = {};
+try { users = JSON.parse(fs.readFileSync(USERS_FILE, 'utf8')); } catch {}
+
+function persistUsers() {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  fs.writeFileSync(USERS_FILE, JSON.stringify(users, null, 2), 'utf8');
+}
+function hashPass(pass, salt) {
+  return crypto.scryptSync(pass, salt, 32).toString('hex');
+}
+function addUser(login, pass) {
+  login = String(login || '').trim().toLowerCase();
+  if (!login || !pass || String(pass).length < 4) return { ok: false, error: 'логин пуст или пароль короче 4 символов' };
+  const salt = crypto.randomBytes(16).toString('hex');
+  users[login] = { salt, hash: hashPass(pass, salt) };
+  persistUsers();
+  return { ok: true };
+}
+function removeUser(login) {
+  delete users[String(login || '').toLowerCase()];
+  persistUsers();
+  return { ok: true };
+}
+function verifyUser(login, pass) {
+  const u = users[String(login || '').trim().toLowerCase()];
+  if (!u) return false;
+  return crypto.timingSafeEqual(Buffer.from(u.hash, 'hex'), Buffer.from(hashPass(pass, u.salt), 'hex'));
+}
+const listUsers = () => Object.keys(users);
+const localEnabled = () => Object.keys(users).length > 0;
+
+module.exports = { configured, anyConfigured, pinEnabled, localEnabled, providers: () => Object.keys(PROVIDERS).filter(configured), startAuth, finishAuth, createSession, getSession, destroySession, addUser, removeUser, verifyUser, listUsers };

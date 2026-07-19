@@ -57,9 +57,14 @@ a { color:var(--accent); }
 <div id="loginBox">
   <h1>ВХОД В JARVIS HUB</h1><br>
   <div id="loginProviders"></div>
+  <form id="localForm" style="display:none;justify-content:center">
+    <input id="loginInput" placeholder="логин" autocomplete="username">
+    <input id="passInput" type="password" placeholder="пароль" autocomplete="current-password">
+    <button type="submit">Войти</button>
+  </form>
   <form id="pinForm" style="display:none;justify-content:center">
     <input id="pinInput" type="password" placeholder="PIN" autocomplete="current-password">
-    <button type="submit">Войти</button>
+    <button type="submit">Войти по PIN</button>
   </form>
   <div class="dim" id="loginMsg">Доступ только для своих</div>
 </div>
@@ -74,6 +79,8 @@ a { color:var(--accent); }
     <div class="dim" id="dispatchMsg"></div>
   </div>
   <div class="panel"><h2>Запуски</h2><table id="runs"></table></div>
+  <div class="panel"><h2>Шаблоны</h2><div class="cmds" id="presets"></div></div>
+  <div class="panel"><h2>Старые сессии kimi</h2><div id="sessions"></div></div>
   <div class="panel"><h2>Команды</h2><div class="cmds" id="cmds"></div>
     <div class="dim" style="margin-top:8px">prune: <button id="prune">убить зависшие</button></div>
   </div>
@@ -95,22 +102,29 @@ async function api(path, opts) { const r = await fetch(path, opts); if (r.status
 
 async function boot() {
   const me = await (await fetch('/api/me')).json();
-  if (me.authRequired && !me.user) return showLogin(me.providers, me.pin);
+  if (me.authRequired && !me.user) return showLogin(me.providers, me.pin, me.local);
   if (me.user) { $('userBadge').textContent = '⬢ ' + me.user + ' '; $('logoutBtn').style.display = ''; }
-  refresh(); startTimer();
+  refresh(); startTimer(); loadSessions();
 }
-function showLogin(providers = [], pin = false) {
+function showLogin(providers = [], pin = false, local = false) {
   $('mainGrid').style.display = 'none';
   $('loginBox').style.display = 'block';
   $('loginProviders').innerHTML = providers.map(p => `<button onclick="location.href='/auth/${p}'">Войти через ${p === 'github' ? 'GitHub' : 'Google'}</button>`).join('');
   if (pin) $('pinForm').style.display = 'flex';
-  if (!pin && !providers.length) $('loginMsg').textContent = 'Провайдеры не настроены';
+  if (local) $('localForm').style.display = 'flex';
+  if (!pin && !local && !providers.length) $('loginMsg').textContent = 'Провайдеры не настроены';
 }
 $('pinForm').onsubmit = async e => {
   e.preventDefault();
   const r = await fetch('/auth/pin', { method: 'POST', body: JSON.stringify({ pin: $('pinInput').value }) });
   if (r.redirected) return location.href = r.url;
   $('loginMsg').textContent = 'неверный PIN';
+};
+$('localForm').onsubmit = async e => {
+  e.preventDefault();
+  const r = await fetch('/auth/local', { method: 'POST', body: JSON.stringify({ login: $('loginInput').value, password: $('passInput').value }) });
+  if (r.redirected) return location.href = r.url;
+  $('loginMsg').textContent = 'неверный логин или пароль';
 };
 function startTimer() { clearInterval(timer); timer = setInterval(refresh, REFRESH); }
 
@@ -126,8 +140,20 @@ async function refresh() {
     $('sys').textContent = `CPU ${s.system.cpu}%  RAM ${s.system.ramFree}/${s.system.ramTotal} GB свободно  C: ${s.system.diskFree} GB\nGPU: ${s.system.gpu} (auto=${s.system.gpuAuto})  Режим: ${s.system.perf} (сеть: ${s.system.perfAC}, батарея: ${s.system.perfBatt})`;
     $('agents').innerHTML = s.agents.map(a => `<div>${a.busy ? '🟡' : '🟢'} <b>${a.name}</b> <span class="dim">${a.model}</span></div>`).join('');
     $('repos').innerHTML = s.repos.map(r => `<div class="dim">${r.repo} — <span style="color:var(--accent)">${r.branch}</span>, изм: ${r.dirty}${r.sync}</div>`).join('');
-    $('runs').innerHTML = '<tr><th>run</th><th>exit</th><th>старт</th></tr>' + s.runs.map(r =>
-      `<tr class="run" data-id="${r.id}"><td>${r.id}</td><td>${r.exit}</td><td>${r.started}</td></tr>`).join('');
+    $('runs').innerHTML = '<tr><th>run</th><th>exit</th><th>старт</th><th></th></tr>' + s.runs.map(r =>
+      `<tr class="run" data-id="${r.id}"><td>${r.id}</td><td>${r.exit}</td><td>${r.started}</td>` +
+      `<td>${r.exit === '...' ? `<button data-stop="${r.id.split('-')[0]}" title="остановить">⏹</button>` : ''}</td></tr>`).join('');
+    document.querySelectorAll('[data-stop]').forEach(b => b.onclick = async e => {
+      e.stopPropagation();
+      if (confirm(`Остановить агента ${b.dataset.stop}?`)) { await api('/api/stop', { method: 'POST', body: JSON.stringify({ agent: b.dataset.stop }) }); setTimeout(refresh, 500); }
+    });
+    $('presets').innerHTML = (s.presets || []).map((p, i) => `<button data-preset="${i}" title="${p.agent}: ${p.task.slice(0, 80)}…">${p.name}</button>`).join('') || '<span class="dim">нет шаблонов</span>';
+    document.querySelectorAll('[data-preset]').forEach(b => b.onclick = async () => {
+      const p = s.presets[+b.dataset.preset];
+      const r = await (await api('/api/dispatch', { method: 'POST', body: JSON.stringify({ agent: p.agent, task: p.task }) })).json();
+      $('dispatchMsg').textContent = r.ok ? `запущен: ${r.runId}` : `ошибка: ${r.error}`;
+      setTimeout(refresh, 500);
+    });
     document.querySelectorAll('tr.run').forEach(tr => tr.onclick = async () => {
       $('resultWrap').style.display = 'block';
       $('result').textContent = await (await api('/api/result?id=' + tr.dataset.id)).text() || '(пусто)';
@@ -148,6 +174,16 @@ $('dispatch').onsubmit = async e => {
   setTimeout(refresh, 500);
 };
 $('prune').onclick = () => api('/api/prune', { method: 'POST', body: '{}' }).then(refresh);
+
+async function loadSessions() {
+  try {
+    const list = await (await api('/api/sessions')).json();
+    $('sessions').innerHTML = list.map(s =>
+      `<div class="row" style="margin-bottom:4px"><button data-open="${s.id}" data-wd="${s.workDir}">↗</button><span class="dim">${s.when} — ${s.id.slice(0, 18)}… · ${s.workDir}</span></div>`).join('') || '<span class="dim">нет сессий</span>';
+    document.querySelectorAll('[data-open]').forEach(b => b.onclick = () =>
+      api('/api/sessions/open', { method: 'POST', body: JSON.stringify({ id: b.dataset.open, workDir: b.dataset.wd }) }));
+  } catch {}
+}
 $('restartBtn').onclick = async () => {
   if (!confirm('Перезапустить сервер Jarvis Hub? Агенты в работе не пострадают.')) return;
   $('restartBtn').textContent = '↻ перезапуск…';
@@ -209,7 +245,22 @@ function renderTab() {
       <a href="https://console.cloud.google.com/apis/credentials" target="_blank">Google</a> (callback: <b>${location.origin}/auth/google/callback</b>).</div><br>`
       + ['GITHUB_CLIENT_ID','GITHUB_CLIENT_SECRET','GOOGLE_CLIENT_ID','GOOGLE_CLIENT_SECRET','AUTH_ALLOW','AUTH_PIN','TELEGRAM_BOT_TOKEN','TELEGRAM_CHAT_ID'].map(k =>
         row(k, `<input class="grow" data-env="${k}" value="" placeholder="${/SECRET|TOKEN|PIN/.test(k) ? '••• (пусто = не менять)' : ''}" autocomplete="off">`)).join('')
-      + `<div class="dim">AUTH_PIN — простой вход по коду (альтернатива OAuth). AUTH_ALLOW — логины/почты через запятую. TELEGRAM_CHAT_ID подставится сам после /start боту. После смены ключей нажми «↻ Перезапуск».</div>`;
+      + `<div class="dim">AUTH_PIN — простой вход по коду (альтернатива OAuth). AUTH_ALLOW — логины/почты через запятую. TELEGRAM_CHAT_ID подставится сам после /start боту. После смены ключей нажми «↻ Перезапуск».</div><br>`
+      + `<div class="dim"><b>Пользователи (логин/пароль):</b> <span id="userList">…</span></div>`
+      + `<div class="row"><input id="newUser" placeholder="логин"><input id="newPass" type="password" placeholder="пароль (мин 4)"><button id="addUser">+ пользователь</button></div>`;
+    (async () => {
+      const r = await (await api('/api/users', { method: 'POST', body: '{}' })).json();
+      $('userList').innerHTML = (r.users || []).map(u => `${u} <button data-del-user="${u}">✕</button>`).join(' ') || 'нет';
+      document.querySelectorAll('[data-del-user]').forEach(x => x.onclick = async () => {
+        await api('/api/users', { method: 'POST', body: JSON.stringify({ action: 'remove', login: x.dataset.delUser }) });
+        renderTab();
+      });
+    })();
+    $('addUser').onclick = async () => {
+      const r = await (await api('/api/users', { method: 'POST', body: JSON.stringify({ action: 'add', login: $('newUser').value, password: $('newPass').value }) })).json();
+      if (!r.ok) return alert(r.error);
+      renderTab();
+    };
   }
 }
 

@@ -29,6 +29,11 @@ const DEFAULTS = {
     { path: 'C:\\Users\\UserBempe\\github_publish\\project-aegis', slug: '' },
     { path: 'C:\\Users\\UserBempe\\github_publish\\USB_AUDIT', slug: 'bimpiRU/USB_AUDIT' },
   ],
+  presets: [
+    { name: '🔍 Проверь систему', agent: 'sysadmin', task: 'Быстрая проверка здоровья системы: CPU, RAM, диск, проблемные устройства, перегрев. Краткий отчёт.' },
+    { name: '🌐 GitHub обзор', agent: 'researcher', task: 'Проверь репозитории bimpiRU на GitHub: открытые PR, issues, что требует внимания. Кратко.' },
+    { name: '🧹 Чистка ПК', agent: 'sysadmin', task: 'Очисти временные файлы (%TEMP% старше 7 дней), проверь свободное место, отчёт.' },
+  ],
 };
 
 function load() {
@@ -39,6 +44,7 @@ function load() {
     agents: stored.agents || DEFAULTS.agents,
     commands: stored.commands || DEFAULTS.commands,
     repos: stored.repos || DEFAULTS.repos,
+    presets: stored.presets || DEFAULTS.presets,
   };
 }
 
