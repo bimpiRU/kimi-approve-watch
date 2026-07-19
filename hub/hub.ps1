@@ -43,7 +43,7 @@ function Get-ActiveRuns {
             Agent   = $agent
             Pid     = $procId
             Done    = Test-Path $exitFile
-            Exit    = if (Test-Path $exitFile) { (Get-Content $exitFile -Raw).Trim() } else { '' }
+            Exit    = if (Test-Path $exitFile) { "$((Get-Content $exitFile -Raw))".Trim() } else { '' }
             Started = $cmdFile.CreationTime
             Alive   = ($procId -gt 0) -and [bool](Get-Process -Id $procId)
         }
