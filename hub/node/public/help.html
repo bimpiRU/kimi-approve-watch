@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Jarvis Hub — Помощь</title>
+<style>
+:root { --accent:#00e5ff; --text:#b8c0cc; --bg:#050b12; --panel:#0a1420; --border:rgba(0,229,255,.35); }
+body { background:var(--bg); color:var(--text); font:15px/1.65 "Cascadia Code",Consolas,monospace; max-width:900px; margin:0 auto; padding:24px; }
+h1 { color:var(--accent); letter-spacing:.3em; }
+h2 { color:var(--accent); margin-top:28px; font-size:16px; }
+code, pre { background:#0d1b2a; border-radius:5px; padding:2px 7px; color:var(--accent); }
+pre { padding:12px; overflow:auto; }
+table { border-collapse:collapse; width:100%; } td,th { border:1px solid #123047; padding:6px 10px; text-align:left; }
+a { color:var(--accent); }
+.dim { color:#5b6b7c; }
+</style>
+</head>
+<body>
+<h1>JARVIS HUB — ПОМОЩЬ</h1>
+<p class="dim">Веб-пульт главагента: агенты Kimi, KAW (апрувы/стабилизатор), GitHub, система. <a href="/">← назад к пульту</a></p>
+
+<h2>1. Что на экране</h2>
+<table>
+<tr><th>Панель</th><th>Содержимое</th></tr>
+<tr><td>KAW</td><td>жив ли watcher (автоапрувы) и stabilizer (здоровье ПК), их PID</td></tr>
+<tr><td>Система</td><td>CPU, RAM, диск C:, GPU-режим G-Helper, профиль питания (сеть/батарея)</td></tr>
+<tr><td>Агенты</td><td>🟢 свободен / 🟡 занят, модель каждого агента</td></tr>
+<tr><td>GitHub</td><td>ветка, число несохранённых изменений, ahead/behind по каждому репо</td></tr>
+<tr><td>Запуски</td><td>история dispatch'ей с exit-кодами; клик по строке — полный вывод агента</td></tr>
+<tr><td>Команды</td><td>кнопки пользовательских команд (редактируются в настройках)</td></tr>
+</table>
+
+<h2>2. Поручить задачу агенту</h2>
+<p>Выбери агента → впиши задачу → «Отправить». Агент стартует фоном (<code>kimi -p</code> с его ролью в его папке). Один активный запуск на агента: повторная отправка ответит «агент занят». Результат — клик по запуску в таблице. Зависшие: кнопка <b>убить зависшие</b> (prune).</p>
+
+<h2>3. Настройки (кнопка ⚙)</h2>
+<table>
+<tr><th>Вкладка</th><th>Что меняется</th></tr>
+<tr><td>Тема</td><td>цвета, текст баннера, интервал автообновления</td></tr>
+<tr><td>Агенты</td><td>добавить/удалить агента; workdir, модель, роль (системный промпт)</td></tr>
+<tr><td>Команды</td><td>свои кнопки: имя + любая командная строка (<code>{KAW}</code> = папка kimi-approve-watch)</td></tr>
+<tr><td>Репозитории</td><td>список репо для панели GitHub (локальный путь + owner/repo)</td></tr>
+<tr><td>Авторизация</td><td>OAuth-ключи GitHub/Google и allowlist; пустые поля не затираются</td></tr>
+</table>
+<p class="dim">Всё хранится в <code>hub/node/data/settings.json</code>, ключи OAuth — в <code>hub/node/.env</code> (в git не попадают).</p>
+
+<h2>4. Вход по GitHub / Google</h2>
+<ol>
+<li>GitHub: <a href="https://github.com/settings/developers">Settings → Developer settings → OAuth Apps</a> → New. Homepage URL: <code>http://127.0.0.1:8787</code>, callback: <code>http://127.0.0.1:8787/auth/github/callback</code>.</li>
+<li>Google: <a href="https://console.cloud.google.com/apis/credentials">console.cloud.google.com → Credentials</a> → OAuth client ID (Web). Redirect URI: <code>http://127.0.0.1:8787/auth/google/callback</code>.</li>
+<li>Вставь Client ID/Secret на вкладке «Авторизация» + <code>AUTH_ALLOW</code> (твой логин GitHub и/или Google-почта через запятую).</li>
+<li>Как только задан хотя бы один провайдер — пульт начинает требовать вход. Без ключей работает открытый локальный режим.</li>
+</ol>
+
+<h2>5. Telegram-управление (с телефона)</h2>
+<ol>
+<li>В @BotFather: <code>/newbot</code> → получи токен.</li>
+<li>Вставь токен в Настройки → Авторизация (<code>TELEGRAM_BOT_TOKEN</code>), нажми «↻ Перезапуск».</li>
+<li>Напиши боту <code>/start</code> — в консоли сервера появится твой chat id; впиши его в <code>TELEGRAM_CHAT_ID</code> и снова перезапусти. Теперь бот отвечает только тебе.</li>
+</ol>
+<p>Команды бота: <code>/status</code>, <code>/runs</code>, <code>/dispatch &lt;агент&gt; &lt;задача&gt;</code>, <code>/prune</code>, <code>/restart</code>, <code>/help</code>. Бот сам присылает уведомления о завершении задач агентов (✅/❌ с хвостом лога) и о старте сервера.</p>
+
+<h2>6. Перенос на сервер</h2>
+<pre>HOST=0.0.0.0 PORT=8787 node server.js        # слушать снаружи
+# или Docker:
+docker build -t jarvis-hub hub/node
+docker run -p 8787:8787 --env-file hub/node/.env jarvis-hub</pre>
+<p>При выносе наружу: обязательно включи OAuth, поменяй callback-URL на домен сервера, поставь перед пультом reverse proxy с HTTPS (Caddy/nginx). Агенты и KAW работают только на Windows-машине — на Linux-сервере пульт поднимется, но панели KAW/G-Helper будут пустыми (это норма: серверная роль — только веб+GitHub, либо держи его на этом ПК).</p>
+
+<h2>6. API (для автоматизации)</h2>
+<table>
+<tr><td><code>GET /api/state</code></td><td>всё состояние одним JSON</td></tr>
+<tr><td><code>POST /api/dispatch</code></td><td>{"agent":"sysadmin","task":"..."}</td></tr>
+<tr><td><code>GET /api/result?id=RUN</code></td><td>вывод запуска</td></tr>
+<tr><td><code>POST /api/cmd</code></td><td>{"name":"brightness-max"}</td></tr>
+<tr><td><code>POST /api/prune</code></td><td>{"minutes":30}</td></tr>
+<tr><td><code>POST /api/restart</code></td><td>перезапуск сервера (кнопка «↻ Перезапуск» в шапке)</td></tr>
+<tr><td><code>GET/POST /api/settings</code></td><td>настройки</td></tr>
+<tr><td><code>GET /api/me</code>, <code>/auth/github</code>, <code>/auth/google</code>, <code>/logout</code></td><td>аутентификация</td></tr>
+</table>
+
+<h2>7. CLI-версия (без браузера)</h2>
+<pre>powershell -File hub\hub.ps1 status | agents | dispatch &lt;a&gt; "задача" | runs | result &lt;id&gt; | prune | gh status | ui</pre>
+</body>
+</html>

@@ -1,0 +1,12 @@
+{
+  "name": "jarvis-hub",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Jarvis Hub — веб-пульт главагента: агенты Kimi, KAW, GitHub, система",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": { "node": ">=20" },
+  "license": "MIT"
+}

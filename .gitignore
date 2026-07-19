@@ -19,3 +19,7 @@ launcher-out.txt
 
 # логи запусков агентов хаба
 hub/runs/
+
+# секреты и данные node-фронта
+hub/node/.env
+hub/node/data/

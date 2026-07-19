@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>JARVIS HUB</title>
+<style>
+:root { --accent:#00e5ff; --ok:#39ff8e; --warn:#ffd75f; --text:#b8c0cc; --bg:#050b12; --panel:#0a1420; --border:rgba(0,229,255,.35); }
+* { box-sizing:border-box; margin:0; padding:0; }
+body { background:var(--bg); color:var(--text); font:14px/1.5 "Cascadia Code",Consolas,monospace; padding:18px; }
+h1 { color:var(--accent); letter-spacing:.35em; text-shadow:0 0 18px var(--accent); font-size:22px; }
+header { display:flex; justify-content:space-between; align-items:center; margin-bottom:14px; gap:10px; flex-wrap:wrap; }
+#clock { color:#5b6b7c; }
+.grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(330px,1fr)); gap:12px; }
+.panel { background:var(--panel); border:1px solid var(--border); border-radius:8px; padding:10px 14px; box-shadow:0 0 14px rgba(0,229,255,.07) inset; }
+.panel h2 { color:var(--accent); font-size:12px; letter-spacing:.25em; text-transform:uppercase; margin-bottom:8px; }
+.panel.wide { grid-column:1/-1; }
+.on { color:var(--ok); } .off { color:#ff5f5f; }
+table { width:100%; border-collapse:collapse; font-size:13px; }
+td,th { text-align:left; padding:3px 8px; border-bottom:1px solid #12202f; }
+tr.run { cursor:pointer; } tr.run:hover { background:#0d1b2a; }
+form { display:flex; gap:8px; flex-wrap:wrap; }
+select,input,textarea,button { background:#0d1b2a; color:var(--text); border:1px solid var(--border); border-radius:6px; padding:7px 10px; font:inherit; }
+input[type=color] { padding:2px; width:44px; height:32px; }
+textarea { width:100%; min-height:52px; }
+input.grow { flex:1; min-width:200px; }
+button { cursor:pointer; color:var(--accent); }
+button:hover { background:#123047; box-shadow:0 0 10px var(--border); }
+.cmds { display:flex; gap:8px; flex-wrap:wrap; }
+#result { white-space:pre-wrap; background:#07101a; border-radius:6px; padding:10px; max-height:300px; overflow:auto; margin-top:8px; }
+.dim { color:#5b6b7c; font-size:12px; }
+a { color:var(--accent); }
+/* модалка */
+#overlay { position:fixed; inset:0; background:rgba(2,6,10,.8); display:none; align-items:center; justify-content:center; z-index:10; }
+#modal { background:var(--panel); border:1px solid var(--border); border-radius:10px; width:min(860px,94vw); max-height:88vh; overflow:auto; padding:16px 20px; }
+.tabs { display:flex; gap:6px; margin-bottom:12px; flex-wrap:wrap; }
+.tabs button.active { background:#123047; }
+.row { display:flex; gap:8px; align-items:center; margin-bottom:6px; flex-wrap:wrap; }
+.row label { min-width:90px; color:#8b98a8; font-size:12px; }
+#loginBox { text-align:center; margin-top:15vh; display:none; }
+#loginBox button { font-size:16px; margin:6px; padding:12px 26px; }
+</style>
+</head>
+<body>
+<header>
+  <h1 id="banner">J A R V I S &nbsp; H U B</h1>
+  <span id="clock"></span>
+  <span>
+    <span id="userBadge" class="dim"></span>
+    <button onclick="location.href='/help'">Помощь</button>
+    <button id="settingsBtn">⚙ Настройки</button>
+    <button id="restartBtn" title="Перезапуск сервера (применить .env, Telegram и т.п.)">↻ Перезапуск</button>
+    <button id="logoutBtn" style="display:none" onclick="location.href='/logout'">Выйти</button>
+  </span>
+</header>
+
+<div id="loginBox">
+  <h1>ВХОД В JARVIS HUB</h1><br>
+  <div id="loginProviders"></div>
+  <div class="dim">Доступ только по allowlist (AUTH_ALLOW)</div>
+</div>
+
+<div class="grid" id="mainGrid">
+  <div class="panel"><h2>KAW</h2><div id="kaw"></div></div>
+  <div class="panel"><h2>Система</h2><div id="sys"></div></div>
+  <div class="panel"><h2>Агенты</h2><div id="agents"></div></div>
+  <div class="panel"><h2>GitHub</h2><div id="repos"></div></div>
+  <div class="panel wide"><h2>Поручить задачу</h2>
+    <form id="dispatch"><select id="agent"></select><input class="grow" id="task" placeholder="задача для агента…"><button type="submit">Отправить</button></form>
+    <div class="dim" id="dispatchMsg"></div>
+  </div>
+  <div class="panel"><h2>Запуски</h2><table id="runs"></table></div>
+  <div class="panel"><h2>Команды</h2><div class="cmds" id="cmds"></div>
+    <div class="dim" style="margin-top:8px">prune: <button id="prune">убить зависшие</button></div>
+  </div>
+  <div class="panel wide" id="resultWrap" style="display:none"><h2>Результат</h2><div id="result"></div></div>
+</div>
+
+<div id="overlay"><div id="modal">
+  <div class="tabs" id="tabs"></div>
+  <div id="tabBody"></div>
+  <div class="row" style="margin-top:12px"><button id="saveSettings">Сохранить</button><button onclick="overlay.style.display='none'">Закрыть</button><span id="saveMsg" class="dim"></span></div>
+</div></div>
+
+<script>
+const $ = id => document.getElementById(id);
+const overlay = $('overlay');
+let SETTINGS = null, TAB = 'theme', REFRESH = 5000, timer = null;
+
+async function api(path, opts) { const r = await fetch(path, opts); if (r.status === 401) { showLogin(); throw new Error('401'); } return r; }
+
+async function boot() {
+  const me = await (await fetch('/api/me')).json();
+  if (me.authRequired && !me.user) return showLogin(me.providers);
+  if (me.user) { $('userBadge').textContent = '⬢ ' + me.user + ' '; $('logoutBtn').style.display = ''; }
+  refresh(); startTimer();
+}
+function showLogin(providers = []) {
+  $('mainGrid').style.display = 'none';
+  $('loginBox').style.display = 'block';
+  $('loginProviders').innerHTML = providers.map(p => `<button onclick="location.href='/auth/${p}'">Войти через ${p === 'github' ? 'GitHub' : 'Google'}</button>`).join('') || '<div class="dim">Провайдеры не настроены</div>';
+}
+function startTimer() { clearInterval(timer); timer = setInterval(refresh, REFRESH); }
+
+async function refresh() {
+  try {
+    const s = await (await api('/api/state')).json();
+    const t = s.theme;
+    for (const k of ['accent','text','ok','warn','bg','panel']) document.documentElement.style.setProperty('--' + k, t[k]);
+    if (t.banner && $('banner').textContent !== t.banner) $('banner').textContent = t.banner;
+    if (t.refreshSec * 1000 !== REFRESH) { REFRESH = t.refreshSec * 1000; startTimer(); }
+    $('clock').textContent = s.time;
+    $('kaw').innerHTML = `watcher&nbsp;&nbsp;&nbsp; <span class="${s.kaw.watcher ? 'on' : 'off'}">${s.kaw.watcher || 'OFF'}</span><br>stabilizer <span class="${s.kaw.stabilizer ? 'on' : 'off'}">${s.kaw.stabilizer || 'OFF'}</span>`;
+    $('sys').textContent = `CPU ${s.system.cpu}%  RAM ${s.system.ramFree}/${s.system.ramTotal} GB свободно  C: ${s.system.diskFree} GB\nGPU: ${s.system.gpu} (auto=${s.system.gpuAuto})  Режим: ${s.system.perf} (сеть: ${s.system.perfAC}, батарея: ${s.system.perfBatt})`;
+    $('agents').innerHTML = s.agents.map(a => `<div>${a.busy ? '🟡' : '🟢'} <b>${a.name}</b> <span class="dim">${a.model}</span></div>`).join('');
+    $('repos').innerHTML = s.repos.map(r => `<div class="dim">${r.repo} — <span style="color:var(--accent)">${r.branch}</span>, изм: ${r.dirty}${r.sync}</div>`).join('');
+    $('runs').innerHTML = '<tr><th>run</th><th>exit</th><th>старт</th></tr>' + s.runs.map(r =>
+      `<tr class="run" data-id="${r.id}"><td>${r.id}</td><td>${r.exit}</td><td>${r.started}</td></tr>`).join('');
+    document.querySelectorAll('tr.run').forEach(tr => tr.onclick = async () => {
+      $('resultWrap').style.display = 'block';
+      $('result').textContent = await (await api('/api/result?id=' + tr.dataset.id)).text() || '(пусто)';
+    });
+    if (!$('agent').options.length) {
+      $('agent').innerHTML = s.agents.map(a => `<option>${a.name}</option>`).join('');
+      $('cmds').innerHTML = s.commands.map(c => `<button data-cmd="${c.name}" title="${c.desc}">${c.name}</button>`).join('');
+      document.querySelectorAll('[data-cmd]').forEach(b => b.onclick = () => api('/api/cmd', { method: 'POST', body: JSON.stringify({ name: b.dataset.cmd }) }));
+    }
+  } catch (e) { if (e.message !== '401') $('clock').textContent = 'сервер недоступен'; }
+}
+
+$('dispatch').onsubmit = async e => {
+  e.preventDefault();
+  const r = await (await api('/api/dispatch', { method: 'POST', body: JSON.stringify({ agent: $('agent').value, task: $('task').value }) })).json();
+  $('dispatchMsg').textContent = r.ok ? `запущен: ${r.runId}` : `ошибка: ${r.error}`;
+  if (r.ok) $('task').value = '';
+  setTimeout(refresh, 500);
+};
+$('prune').onclick = () => api('/api/prune', { method: 'POST', body: '{}' }).then(refresh);
+$('restartBtn').onclick = async () => {
+  if (!confirm('Перезапустить сервер Jarvis Hub? Агенты в работе не пострадают.')) return;
+  $('restartBtn').textContent = '↻ перезапуск…';
+  try { await api('/api/restart', { method: 'POST', body: '{}' }); } catch {}
+  for (let i = 0; i < 40; i++) {
+    await new Promise(r => setTimeout(r, 1000));
+    try { if ((await fetch('/api/health')).ok) return location.reload(); } catch {}
+  }
+  $('restartBtn').textContent = '↻ не поднялся';
+};
+
+/* ---------- настройки ---------- */
+const TABS = { theme: 'Тема', agents: 'Агенты', commands: 'Команды', repos: 'Репозитории', auth: 'Авторизация' };
+$('settingsBtn').onclick = async () => {
+  SETTINGS = await (await api('/api/settings')).json();
+  $('tabs').innerHTML = Object.entries(TABS).map(([k, v]) => `<button data-tab="${k}">${v}</button>`).join('');
+  document.querySelectorAll('[data-tab]').forEach(b => b.onclick = () => { TAB = b.dataset.tab; renderTab(); });
+  renderTab(); overlay.style.display = 'flex';
+};
+const esc = s => String(s ?? '').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+const row = (label, inner) => `<div class="row"><label>${label}</label>${inner}</div>`;
+
+function renderTab() {
+  document.querySelectorAll('[data-tab]').forEach(b => b.classList.toggle('active', b.dataset.tab === TAB));
+  const b = $('tabBody');
+  if (TAB === 'theme') {
+    const t = SETTINGS.theme;
+    b.innerHTML = ['accent','text','ok','warn','bg','panel'].map(k => row(k, `<input type="color" id="th_${k}" value="${t[k]}">`)).join('')
+      + row('баннер', `<input class="grow" id="th_banner" value="${esc(t.banner)}">`)
+      + row('обновл., сек', `<input id="th_refreshSec" type="number" min="2" max="60" value="${t.refreshSec}">`);
+  }
+  if (TAB === 'agents') {
+    b.innerHTML = Object.entries(SETTINGS.agents).map(([n, a], i) =>
+      `<fieldset style="border:1px solid #123047;border-radius:6px;margin-bottom:8px;padding:8px"><legend>${esc(n)} <button data-del-agent="${n}">✕</button></legend>`
+      + row('workdir', `<input class="grow" data-ag="${n}" data-f="workdir" value="${esc(a.workdir)}">`)
+      + row('model', `<input class="grow" data-ag="${n}" data-f="model" value="${esc(a.model)}" placeholder="пусто = default">`)
+      + row('role', `<textarea data-ag="${n}" data-f="role">${esc(a.role)}</textarea>`) + '</fieldset>').join('')
+      + `<div class="row"><input id="newAgent" placeholder="имя нового агента"><button id="addAgent">+ агент</button></div>`;
+    $('addAgent').onclick = () => { const n = $('newAgent').value.trim(); if (n) { SETTINGS.agents[n] = { workdir: '', model: '', role: '' }; renderTab(); } };
+    b.querySelectorAll('[data-del-agent]').forEach(x => x.onclick = () => { delete SETTINGS.agents[x.dataset.delAgent]; renderTab(); });
+  }
+  if (TAB === 'commands') {
+    b.innerHTML = Object.entries(SETTINGS.commands).map(([n, c]) =>
+      row(`<button data-del-cmd="${n}">✕</button> ${esc(n)}`, `<input class="grow" data-cmd-name="${n}" data-f="desc" value="${esc(c.desc)}" title="описание"><input class="grow" data-cmd-name="${n}" data-f="run" value="${esc(c.run)}" title="команда">`)).join('')
+      + `<div class="row"><input id="newCmd" placeholder="имя"><input class="grow" id="newCmdRun" placeholder="командная строка"><button id="addCmd">+ команда</button></div>`;
+    $('addCmd').onclick = () => { const n = $('newCmd').value.trim(); if (n) { SETTINGS.commands[n] = { desc: n, run: $('newCmdRun').value }; renderTab(); } };
+    b.querySelectorAll('[data-del-cmd]').forEach(x => x.onclick = () => { delete SETTINGS.commands[x.dataset.delCmd]; renderTab(); });
+  }
+  if (TAB === 'repos') {
+    b.innerHTML = SETTINGS.repos.map((r, i) =>
+      row(`<button data-del-repo="${i}">✕</button>`, `<input class="grow" data-repo="${i}" data-f="path" value="${esc(r.path)}" title="локальный путь"><input data-repo="${i}" data-f="slug" value="${esc(r.slug)}" title="owner/repo" placeholder="owner/repo">`)).join('')
+      + `<div class="row"><button id="addRepo">+ репозиторий</button></div>`;
+    $('addRepo').onclick = () => { SETTINGS.repos.push({ path: '', slug: '' }); renderTab(); };
+    b.querySelectorAll('[data-del-repo]').forEach(x => x.onclick = () => { SETTINGS.repos.splice(+x.dataset.delRepo, 1); renderTab(); });
+  }
+  if (TAB === 'auth') {
+    b.innerHTML = `<div class="dim">Ключи OAuth хранятся в hub/node/.env (не коммитятся). Создай OAuth App:
+      <a href="https://github.com/settings/developers" target="_blank">GitHub</a> (callback: <b>${location.origin}/auth/github/callback</b>) и
+      <a href="https://console.cloud.google.com/apis/credentials" target="_blank">Google</a> (callback: <b>${location.origin}/auth/google/callback</b>).</div><br>`
+      + ['GITHUB_CLIENT_ID','GITHUB_CLIENT_SECRET','GOOGLE_CLIENT_ID','GOOGLE_CLIENT_SECRET','AUTH_ALLOW','TELEGRAM_BOT_TOKEN','TELEGRAM_CHAT_ID'].map(k =>
+        row(k, `<input class="grow" data-env="${k}" value="" placeholder="${/SECRET|TOKEN/.test(k) ? '••• (пусто = не менять)' : ''}" autocomplete="off">`)).join('')
+      + `<div class="dim">AUTH_ALLOW — логины/почты через запятую. TELEGRAM_BOT_TOKEN — токен от @BotFather; TELEGRAM_CHAT_ID — id твоего чата (напиши боту /start, id появится в консоли сервера). После смены ключей нажми «↻ Перезапуск».</div>`;
+  }
+}
+
+$('saveSettings').onclick = async () => {
+  if (TAB === 'theme') {
+    for (const k of ['accent','text','ok','warn','bg','panel']) SETTINGS.theme[k] = $('th_' + k).value;
+    SETTINGS.theme.banner = $('th_banner').value; SETTINGS.theme.refreshSec = +$('th_refreshSec').value || 5;
+  }
+  if (TAB === 'agents') document.querySelectorAll('[data-ag]').forEach(i => SETTINGS.agents[i.dataset.ag][i.dataset.f] = i.value);
+  if (TAB === 'commands') document.querySelectorAll('[data-cmd-name]').forEach(i => SETTINGS.commands[i.dataset.cmdName][i.dataset.f] = i.value);
+  if (TAB === 'repos') document.querySelectorAll('[data-repo]').forEach(i => SETTINGS.repos[+i.dataset.repo][i.dataset.f] = i.value);
+  if (TAB === 'auth') {
+    const authEnv = {};
+    document.querySelectorAll('[data-env]').forEach(i => { if (i.value.trim()) authEnv[i.dataset.env] = i.value.trim(); });
+    const r = await (await api('/api/settings', { method: 'POST', body: JSON.stringify({ authEnv }) })).json();
+    $('saveMsg').textContent = r.ok ? 'сохранено' : 'ошибка';
+    return;
+  }
+  const r = await (await api('/api/settings', { method: 'POST', body: JSON.stringify(SETTINGS) })).json();
+  $('saveMsg').textContent = r.ok ? 'сохранено' : 'ошибка';
+  refresh();
+};
+
+boot();
+</script>
+</body>
+</html>
