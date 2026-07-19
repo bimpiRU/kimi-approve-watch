@@ -14,6 +14,7 @@
         WorkDir = 'C:\Users\UserBempe'
         Role    = 'Ты — агент-исследователь. Ищешь информацию в интернете, проверяешь факты, даёшь выжимку с источниками.'
         Mode    = 'auto'
+        Model   = 'kimi-code/kimi-for-coding-highspeed' # быстрые простые задачи — дешевле по времени
     }
     jarvis = @{
         WorkDir = 'C:\Users\UserBempe\github_publish\jarvis-assistant'
