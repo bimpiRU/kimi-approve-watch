@@ -76,14 +76,14 @@ function runStates() {
 let reposCache = null, reposCacheAt = 0;
 function repoStates(repos) {
   if (reposCache && Date.now() - reposCacheAt < 30000) return reposCache;
-  const git = (cwd, args) => { try { return execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim(); } catch { return ''; } };
+  const git = (cwd, args) => { try { return execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true }).trim(); } catch { return ''; } };
   reposCache = repos.filter(r => { try { return fs.existsSync(path.join(r.path, '.git')); } catch { return false; } })
     .map(r => {
       const branch = git(r.path, ['branch', '--show-current']);
       const dirty = git(r.path, ['status', '--porcelain']).split('\n').filter(Boolean).length;
       const sb = git(r.path, ['status', '-sb']).split('\n')[0] || '';
       const m = sb.match(/\[(.*)\]/);
-      return { repo: path.basename(r.path), slug: r.slug || '', branch, dirty, sync: m ? ` [${m[1]}]` : '' };
+      return { repo: path.basename(r.path), path: r.path, slug: r.slug || '', branch, dirty, sync: m ? ` [${m[1]}]` : '' };
     });
   reposCacheAt = Date.now();
   return reposCache;

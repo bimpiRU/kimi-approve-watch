@@ -31,7 +31,9 @@ function dispatch(settings, RUNS_DIR, agent, task) {
   const log = path.join(RUNS_DIR, `${id}.log`);
   const errLog = path.join(RUNS_DIR, `${id}.err.log`);
   const exitF = path.join(RUNS_DIR, `${id}.exit`);
-  const prompt = `${a.role}\n\nЗадача от главагента: ${task}\n\nКогда закончишь — дай краткий итог: что сделано, что нет и почему.`;
+  const prompt = `${a.role}\n\nЗадача от главагента: ${task}\n\nКогда закончишь — дай краткий итог: что сделано, что нет и почему.`
+    .replace(/\{AGENT_TOKEN\}/g, process.env.AGENT_TOKEN || '')
+    .replace(/\{HUB_URL\}/g, `http://127.0.0.1:${process.env.PORT || 8787}`);
   const modelArg = a.model ? `-m "${a.model}"` : '';
   // Промпт уходит через env-переменную (Unicode, без проблем кодировки cmd);
   // чистим только символы, ломающие парсинг cmd после подстановки.

@@ -37,6 +37,12 @@ const readBody = req => new Promise(resolve => {
 });
 const baseUrl = req => `${req.headers['x-forwarded-proto'] || 'http'}://${req.headers.host}`;
 
+// AGENT_TOKEN: пропуск локальных агентов мимо логина (мастерагент дёргает API)
+if (!process.env.AGENT_TOKEN) {
+  process.env.AGENT_TOKEN = require('crypto').randomBytes(24).toString('hex');
+  fs.appendFileSync(path.join(__dirname, '.env'), `AGENT_TOKEN=${process.env.AGENT_TOKEN}\n`);
+}
+
 function restartServer() {
   setTimeout(() => {
     // новый экземпляр поднимется рядом, старый уходит; дочерним агентам detached не вредит
@@ -114,7 +120,9 @@ async function handler(req, res) {
     }
 
     // --- защищённые маршруты ---
-    if (auth.anyConfigured() && !auth.getSession(req)) {
+    const agentToken = process.env.AGENT_TOKEN;
+    const isAgent = agentToken && req.headers['x-agent-token'] === agentToken; // локальные агенты (мастерагент)
+    if (auth.anyConfigured() && !auth.getSession(req) && !isAgent) {
       if (p.startsWith('/api/')) return json(res, 401, { error: 'unauthorized' });
     }
 
@@ -153,7 +161,7 @@ async function handler(req, res) {
       const line = cmd.run.replace(/\{KAW\}/g, state.KAW_DIR);
       const f = path.join(RUNS_DIR, `cmd-${Date.now()}.cmd`);
       fs.writeFileSync(f, '@echo off\r\nchcp 65001 >nul\r\n' + line + '\r\n', 'utf8');
-      require('child_process').spawn('cmd.exe', ['/c', f], { stdio: 'ignore' }).unref();
+      require('child_process').spawn('cmd.exe', ['/c', f], { stdio: 'ignore', windowsHide: true }).unref();
       return json(res, 200, { ok: true });
     }
     if (p === '/api/prune' && req.method === 'POST') {
@@ -209,9 +217,38 @@ async function handler(req, res) {
       const lock = path.join(RUNS_DIR, `${agent}.lock`);
       if (!fs.existsSync(lock)) return json(res, 404, { ok: false, error: 'агент не запущен' });
       const pid = parseInt(fs.readFileSync(lock, 'utf8'), 10);
-      require('child_process').execFile('taskkill', ['/PID', String(pid), '/T', '/F'], () => {});
+      require('child_process').execFile('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true }, () => {});
       fs.rmSync(lock, { force: true });
       return json(res, 200, { ok: true });
+    }
+    if (p === '/api/broadcast' && req.method === 'POST') {
+      const body = await readBody(req);
+      const results = {};
+      for (const name of Object.keys(settings.agents)) {
+        if (name === 'master') continue;
+        results[name] = disp.dispatch(settings, RUNS_DIR, name, body.task);
+      }
+      return json(res, 200, { ok: true, results });
+    }
+    if (p === '/api/repos' && req.method === 'POST') {
+      const body = await readBody(req);
+      const repo = (settings.repos || []).find(r => r.path === body.path);
+      if (!repo) return json(res, 404, { ok: false, error: 'репо не в списке' });
+      const allowed = ['fetch', 'pull', 'push'];
+      if (!allowed.includes(body.action)) return json(res, 400, { ok: false, error: 'действие: fetch|pull|push' });
+      require('child_process').execFile('git', ['-C', repo.path, body.action], { windowsHide: true, timeout: 60000 }, (err, stdout, stderr) => {
+        json(res, 200, { ok: !err, out: (stdout + stderr).trim().slice(0, 2000) });
+      });
+      return;
+    }
+    if (p === '/api/models') {
+      // модели из конфига kimi (~/.kimi-code/config.toml)
+      const models = [];
+      try {
+        const cfg = fs.readFileSync(path.join(process.env.USERPROFILE, '.kimi-code', 'config.toml'), 'utf8');
+        for (const m of cfg.matchAll(/\[models\."([^"]+)"\]/g)) models.push(m[1]);
+      } catch {}
+      return json(res, 200, models);
     }
     if (p === '/api/settings') {
       if (req.method === 'GET') return json(res, 200, settings);

@@ -15,6 +15,7 @@ const DEFAULTS = {
     coder:      { workdir: 'D:\\Repo', model: '', role: 'Ты — агент-разработчик. Пишешь и правишь код в репозиториях D:\\Repo, запускаешь тесты, не делаешь git push без явной команды.' },
     researcher: { workdir: 'C:\\Users\\UserBempe', model: 'kimi-code/kimi-for-coding-highspeed', role: 'Ты — агент-исследователь. Ищешь информацию в интернете, проверяешь факты, даёшь выжимку с источниками.' },
     jarvis:     { workdir: 'C:\\Users\\UserBempe\\github_publish\\jarvis-assistant', model: '', role: 'Ты — агент голосового ассистента Jarvis (Python). Развиваешь jarvis-assistant: команды, интеграции с Kimi и KAW.' },
+    master:     { workdir: 'C:\\Users\\UserBempe', model: '', role: 'Ты — мастерагент Jarvis Hub. Твоя работа: разбить задачу главагента на подзадачи, раздать их агентам (sysadmin, coder, researcher, jarvis) и собрать итог. Поручение: curl -s -X POST -H "Content-Type: application/json" -H "x-agent-token: {AGENT_TOKEN}" -d "{\\"agent\\":\\"ИМЯ\\",\\"task\\":\\"ЗАДАЧА\\"}" {HUB_URL}/api/dispatch — вернёт runId. Статус: curl -s -H "x-agent-token: {AGENT_TOKEN}" {HUB_URL}/api/state. Результат запуска: curl -s -H "x-agent-token: {AGENT_TOKEN}" "{HUB_URL}/api/result?id=RUNID". Не делай работу агентов сам — делегируй, жди завершения (exit в /api/state), суммируй.' },
   },
   commands: {
     'brightness-max': { desc: 'Яркость ноутбука на 100%', run: 'powershell -NoProfile -Command "(Get-WmiObject -Namespace root/wmi -Class WmiMonitorBrightnessMethods).WmiSetBrightness(1,100)"' },
@@ -41,7 +42,7 @@ function load() {
   try { stored = JSON.parse(fs.readFileSync(FILE, 'utf8')); } catch {}
   return {
     theme: { ...DEFAULTS.theme, ...(stored.theme || {}) },
-    agents: stored.agents || DEFAULTS.agents,
+    agents: { ...DEFAULTS.agents, ...(stored.agents || {}) }, // новые дефолтные агенты (master) подтягиваются сами
     commands: stored.commands || DEFAULTS.commands,
     repos: stored.repos || DEFAULTS.repos,
     presets: stored.presets || DEFAULTS.presets,

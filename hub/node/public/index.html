@@ -46,6 +46,12 @@ a { color:var(--accent); }
   <h1 id="banner">J A R V I S &nbsp; H U B</h1>
   <span id="clock"></span>
   <span>
+    <select id="themeSel" title="Тема оформления">
+      <option value="jarvis">Jarvis</option>
+      <option value="terminal">Терминал</option>
+      <option value="green">Зелёный терминал</option>
+      <option value="cloud">Облако</option>
+    </select>
     <span id="userBadge" class="dim"></span>
     <button onclick="location.href='/help'">Помощь</button>
     <button id="settingsBtn">⚙ Настройки</button>
@@ -96,7 +102,25 @@ a { color:var(--accent); }
 <script>
 const $ = id => document.getElementById(id);
 const overlay = $('overlay');
-let SETTINGS = null, TAB = 'theme', REFRESH = 5000, timer = null;
+let SETTINGS = null, TAB = 'theme', REFRESH = 5000, timer = null, liveRun = null;
+
+/* ---------- темы ---------- */
+const THEMES = {
+  jarvis:   { accent:'#00e5ff', text:'#b8c0cc', ok:'#39ff8e', warn:'#ffd75f', bg:'#050b12', panel:'#0a1420' },
+  terminal: { accent:'#e0e0e0', text:'#c8c8c8', ok:'#7ee787', warn:'#e3b341', bg:'#000000', panel:'#0d0d0d' },
+  green:    { accent:'#00ff41', text:'#9fdf9f', ok:'#00ff41', warn:'#e6ff5f', bg:'#020a02', panel:'#041204' },
+  cloud:    { accent:'#4a90d9', text:'#33475b', ok:'#2e9e6b', warn:'#d9962e', bg:'#eef4fb', panel:'#ffffff' },
+};
+function applyTheme(name) {
+  const t = THEMES[name] || THEMES.jarvis;
+  for (const [k, v] of Object.entries(t)) document.documentElement.style.setProperty('--' + k, v);
+}
+$('themeSel').onchange = async () => {
+  const name = $('themeSel').value;
+  applyTheme(name);
+  const cur = await (await api('/api/settings')).json();
+  await api('/api/settings', { method: 'POST', body: JSON.stringify({ theme: { ...cur.theme, ...THEMES[name] } }) });
+};
 
 async function api(path, opts) { const r = await fetch(path, opts); if (r.status === 401) { showLogin(); throw new Error('401'); } return r; }
 
@@ -139,7 +163,14 @@ async function refresh() {
     $('kaw').innerHTML = `watcher&nbsp;&nbsp;&nbsp; <span class="${s.kaw.watcher ? 'on' : 'off'}">${s.kaw.watcher || 'OFF'}</span><br>stabilizer <span class="${s.kaw.stabilizer ? 'on' : 'off'}">${s.kaw.stabilizer || 'OFF'}</span>`;
     $('sys').textContent = `CPU ${s.system.cpu}%  RAM ${s.system.ramFree}/${s.system.ramTotal} GB свободно  C: ${s.system.diskFree} GB\nGPU: ${s.system.gpu} (auto=${s.system.gpuAuto})  Режим: ${s.system.perf} (сеть: ${s.system.perfAC}, батарея: ${s.system.perfBatt})`;
     $('agents').innerHTML = s.agents.map(a => `<div>${a.busy ? '🟡' : '🟢'} <b>${a.name}</b> <span class="dim">${a.model}</span></div>`).join('');
-    $('repos').innerHTML = s.repos.map(r => `<div class="dim">${r.repo} — <span style="color:var(--accent)">${r.branch}</span>, изм: ${r.dirty}${r.sync}</div>`).join('');
+    $('repos').innerHTML = s.repos.map(r => `<div class="dim">${r.repo} — <span style="color:var(--accent)">${r.branch}</span>, изм: ${r.dirty}${r.sync}
+      <button data-git="pull" data-path="${r.path || ''}" title="git pull">⟳</button><button data-git="push" data-path="${r.path || ''}" title="git push">⬆</button></div>`).join('');
+    document.querySelectorAll('[data-git]').forEach(b => b.onclick = async () => {
+      b.disabled = true;
+      const r = await (await api('/api/repos', { method: 'POST', body: JSON.stringify({ action: b.dataset.git, path: b.dataset.path }) })).json();
+      $('dispatchMsg').textContent = (r.ok ? '✓ ' : '✗ ') + (r.out || r.error || '');
+      b.disabled = false; setTimeout(refresh, 800);
+    });
     $('runs').innerHTML = '<tr><th>run</th><th>exit</th><th>старт</th><th></th></tr>' + s.runs.map(r =>
       `<tr class="run" data-id="${r.id}"><td>${r.id}</td><td>${r.exit}</td><td>${r.started}</td>` +
       `<td>${r.exit === '...' ? `<button data-stop="${r.id.split('-')[0]}" title="остановить">⏹</button>` : ''}</td></tr>`).join('');
@@ -156,10 +187,18 @@ async function refresh() {
     });
     document.querySelectorAll('tr.run').forEach(tr => tr.onclick = async () => {
       $('resultWrap').style.display = 'block';
-      $('result').textContent = await (await api('/api/result?id=' + tr.dataset.id)).text() || '(пусто)';
+      liveRun = tr.dataset.id;
+      $('result').textContent = await (await api('/api/result?id=' + liveRun)).text() || '(пусто)';
     });
+    // live-вывод: если открыт лог работающего агента — обновляем
+    if (liveRun) {
+      const still = s.runs.find(r => r.id === liveRun);
+      if (still && still.exit === '...') {
+        $('result').textContent = await (await api('/api/result?id=' + liveRun)).text() || '(пусто)';
+      } else if (still) { liveRun = null; }
+    }
     if (!$('agent').options.length) {
-      $('agent').innerHTML = s.agents.map(a => `<option>${a.name}</option>`).join('');
+      $('agent').innerHTML = '<option value="__all">⬢ всем агентам</option>' + s.agents.map(a => `<option>${a.name}</option>`).join('');
       $('cmds').innerHTML = s.commands.map(c => `<button data-cmd="${c.name}" title="${c.desc}">${c.name}</button>`).join('');
       document.querySelectorAll('[data-cmd]').forEach(b => b.onclick = () => api('/api/cmd', { method: 'POST', body: JSON.stringify({ name: b.dataset.cmd }) }));
     }
@@ -168,7 +207,16 @@ async function refresh() {
 
 $('dispatch').onsubmit = async e => {
   e.preventDefault();
-  const r = await (await api('/api/dispatch', { method: 'POST', body: JSON.stringify({ agent: $('agent').value, task: $('task').value }) })).json();
+  const agent = $('agent').value;
+  if (agent === '__all') {
+    const r = await (await api('/api/broadcast', { method: 'POST', body: JSON.stringify({ task: $('task').value }) })).json();
+    const ok = Object.entries(r.results || {}).map(([n, v]) => `${n}:${v.ok ? 'запущен' : v.error}`).join(', ');
+    $('dispatchMsg').textContent = ok;
+    if (r.ok) $('task').value = '';
+    setTimeout(refresh, 500);
+    return;
+  }
+  const r = await (await api('/api/dispatch', { method: 'POST', body: JSON.stringify({ agent, task: $('task').value }) })).json();
   $('dispatchMsg').textContent = r.ok ? `запущен: ${r.runId}` : `ошибка: ${r.error}`;
   if (r.ok) $('task').value = '';
   setTimeout(refresh, 500);
@@ -216,12 +264,13 @@ function renderTab() {
       + row('обновл., сек', `<input id="th_refreshSec" type="number" min="2" max="60" value="${t.refreshSec}">`);
   }
   if (TAB === 'agents') {
-    b.innerHTML = Object.entries(SETTINGS.agents).map(([n, a], i) =>
+    b.innerHTML = `<datalist id="modelList"></datalist>` + Object.entries(SETTINGS.agents).map(([n, a], i) =>
       `<fieldset style="border:1px solid #123047;border-radius:6px;margin-bottom:8px;padding:8px"><legend>${esc(n)} <button data-del-agent="${n}">✕</button></legend>`
       + row('workdir', `<input class="grow" data-ag="${n}" data-f="workdir" value="${esc(a.workdir)}">`)
-      + row('model', `<input class="grow" data-ag="${n}" data-f="model" value="${esc(a.model)}" placeholder="пусто = default">`)
+      + row('model', `<input class="grow" list="modelList" data-ag="${n}" data-f="model" value="${esc(a.model)}" placeholder="пусто = default">`)
       + row('role', `<textarea data-ag="${n}" data-f="role">${esc(a.role)}</textarea>`) + '</fieldset>').join('')
       + `<div class="row"><input id="newAgent" placeholder="имя нового агента"><button id="addAgent">+ агент</button></div>`;
+    api('/api/models').then(r => r.json()).then(m => { $('modelList').innerHTML = m.map(x => `<option>${x}</option>`).join(''); });
     $('addAgent').onclick = () => { const n = $('newAgent').value.trim(); if (n) { SETTINGS.agents[n] = { workdir: '', model: '', role: '' }; renderTab(); } };
     b.querySelectorAll('[data-del-agent]').forEach(x => x.onclick = () => { delete SETTINGS.agents[x.dataset.delAgent]; renderTab(); });
   }
