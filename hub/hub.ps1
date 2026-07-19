@@ -75,10 +75,15 @@ function Invoke-Dispatch {
     $log   = Join-Path $RunsDir "$runId.log"
     $errLog = Join-Path $RunsDir "$runId.err.log"
     $prompt = "{0}`n`nЗадача от главагента: {1}`n`nКогда закончишь — дай краткий итог: что сделано, что нет и почему." -f $a.Role, $Task
-    $modeArg = if ($a.Mode -eq 'yolo') { '--yolo' } else { '--auto' }
-    $proc = Start-Process -FilePath $Kimi -ArgumentList @('-p', $prompt, '--output-format', 'text', $modeArg) `
-        -WorkingDirectory $a.WorkDir -WindowStyle Hidden -PassThru `
-        -RedirectStandardOutput $log -RedirectStandardError $errLog
+    $modeArg = '' # kimi -p не принимает --auto/--yolo; разрешения берутся из config.toml
+    # PowerShell 5.1 ломает квотирование аргументов со спецсимволами — уходим через .cmd-файл
+    $safe = ($prompt -replace '\r?\n', ' ' -replace '"', "'") -replace '[&|<>^]', ' ' -replace '%', '%%'
+    $cmdFile = Join-Path $RunsDir "$runId.cmd"
+    Set-Content -Path $cmdFile -Encoding OEM -Value (
+        '@echo off', "`"$Kimi`" -p `"$safe`" --output-format text $modeArg > `"$log`" 2> `"$errLog`""
+    )
+    $proc = Start-Process -FilePath 'cmd.exe' -ArgumentList '/c', "`"$cmdFile`"" `
+        -WorkingDirectory $a.WorkDir -WindowStyle Hidden -PassThru
     Write-Host "Запущен агент '$Name' (PID $($proc.Id)), run: $runId" -ForegroundColor Green
     Write-Host "  лог: $log"
 }

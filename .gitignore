@@ -16,3 +16,6 @@ kaw.config.psd1
 # launcher stdio redirects
 launcher-err.txt
 launcher-out.txt
+
+# логи запусков агентов хаба
+hub/runs/
