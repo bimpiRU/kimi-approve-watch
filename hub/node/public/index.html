@@ -27,7 +27,8 @@ input.grow { flex:1; min-width:200px; }
 button { cursor:pointer; color:var(--accent); }
 button:hover { background:#123047; box-shadow:0 0 10px var(--border); }
 .cmds { display:flex; gap:8px; flex-wrap:wrap; }
-#result { white-space:pre-wrap; background:#07101a; border-radius:6px; padding:10px; max-height:300px; overflow:auto; margin-top:8px; }
+#result { white-space: pre-wrap; background:#07101a; border-radius:6px; padding:10px; max-height:300px; overflow:auto; margin-top:8px; }
+#sys { white-space: pre-wrap; }
 .dim { color:#5b6b7c; font-size:12px; }
 a { color:var(--accent); }
 /* модалка */
@@ -118,7 +119,15 @@ $('themeSel').onchange = async () => {
   await api('/api/settings', { method: 'POST', body: JSON.stringify({ theme: { ...cur.theme, ...SERVER_THEMES[name], preset: name } }) });
 };
 
-async function api(path, opts) { const r = await fetch(path, opts); if (r.status === 401) { showLogin(); throw new Error('401'); } return r; }
+async function api(path, opts) {
+  const r = await fetch(path, opts);
+  if (r.status === 401) { // сессия истекла — перечитываем провайдеров и показываем правильную форму
+    const me = await (await fetch('/api/me')).json();
+    showLogin(me.providers, me.pin, me.local);
+    throw new Error('401');
+  }
+  return r;
+}
 
 async function boot() {
   const me = await (await fetch('/api/me')).json();
@@ -159,13 +168,13 @@ async function refresh() {
     }
     if (t.preset && $('themeSel').value !== t.preset) $('themeSel').value = t.preset;
     if (t.banner && $('banner').textContent !== t.banner) $('banner').textContent = t.banner;
-    if (t.refreshSec * 1000 !== REFRESH) { REFRESH = t.refreshSec * 1000; startTimer(); }
+    if (Number.isFinite(t.refreshSec) && t.refreshSec >= 2 && t.refreshSec * 1000 !== REFRESH) { REFRESH = t.refreshSec * 1000; startTimer(); }
     $('clock').textContent = s.time;
     $('kaw').innerHTML = `watcher&nbsp;&nbsp;&nbsp; <span class="${s.kaw.watcher ? 'on' : 'off'}">${s.kaw.watcher || 'OFF'}</span><br>stabilizer <span class="${s.kaw.stabilizer ? 'on' : 'off'}">${s.kaw.stabilizer || 'OFF'}</span>`;
     $('sys').textContent = `CPU ${s.system.cpu}%  RAM ${s.system.ramFree}/${s.system.ramTotal} GB свободно  C: ${s.system.diskFree} GB\nGPU: ${s.system.gpu} (auto=${s.system.gpuAuto})  Режим: ${s.system.perf} (сеть: ${s.system.perfAC}, батарея: ${s.system.perfBatt})`;
     $('agents').innerHTML = s.agents.map(a => `<div>${a.busy ? '🟡' : '🟢'} <b>${a.name}</b> <span class="dim">${a.model}</span></div>`).join('');
-    $('repos').innerHTML = s.repos.map(r => `<div class="dim">${r.repo} — <span style="color:var(--accent)">${r.branch}</span>, изм: ${r.dirty}${r.sync}
-      <button data-git="pull" data-path="${r.path || ''}" title="git pull">⟳</button><button data-git="push" data-path="${r.path || ''}" title="git push">⬆</button></div>`).join('');
+    $('repos').innerHTML = s.repos.map(r => `<div class="dim">${esc(r.repo)} — <span style="color:var(--accent)">${esc(r.branch)}</span>, изм: ${r.dirty}${esc(r.sync)}
+      <button data-git="pull" data-path="${esc(r.path)}" title="git pull">⟳</button><button data-git="push" data-path="${esc(r.path)}" title="git push">⬆</button></div>`).join('');
     document.querySelectorAll('[data-git]').forEach(b => b.onclick = async () => {
       b.disabled = true;
       const r = await (await api('/api/repos', { method: 'POST', body: JSON.stringify({ action: b.dataset.git, path: b.dataset.path }) })).json();
@@ -179,7 +188,7 @@ async function refresh() {
       e.stopPropagation();
       if (confirm(`Остановить агента ${b.dataset.stop}?`)) { await api('/api/stop', { method: 'POST', body: JSON.stringify({ agent: b.dataset.stop }) }); setTimeout(refresh, 500); }
     });
-    $('presets').innerHTML = (s.presets || []).map((p, i) => `<button data-preset="${i}" title="${p.agent}: ${p.task.slice(0, 80)}…">${p.name}</button>`).join('') || '<span class="dim">нет шаблонов</span>';
+    $('presets').innerHTML = (s.presets || []).map((p, i) => `<button data-preset="${i}" title="${esc(p.agent + ': ' + p.task.slice(0, 80))}…">${esc(p.name)}</button>`).join('') || '<span class="dim">нет шаблонов</span>';
     document.querySelectorAll('[data-preset]').forEach(b => b.onclick = async () => {
       const p = s.presets[+b.dataset.preset];
       const r = await (await api('/api/dispatch', { method: 'POST', body: JSON.stringify({ agent: p.agent, task: p.task }) })).json();
@@ -194,9 +203,10 @@ async function refresh() {
     // live-вывод: если открыт лог работающего агента — обновляем
     if (liveRun) {
       const still = s.runs.find(r => r.id === liveRun);
-      if (still && still.exit === '...') {
+      if (!still) liveRun = null; // запуск исчез (prune) — сброс
+      else if (still.exit === '...') {
         $('result').textContent = await (await api('/api/result?id=' + liveRun)).text() || '(пусто)';
-      } else if (still) { liveRun = null; }
+      } else liveRun = null;
     }
     if (!$('agent').options.length) {
       $('agent').innerHTML = s.agents.map(a => `<option>${a.name}</option>`).join('');
@@ -220,7 +230,7 @@ async function loadSessions() {
   try {
     const list = await (await api('/api/sessions')).json();
     $('sessions').innerHTML = list.map(s =>
-      `<div class="row" style="margin-bottom:4px"><button data-open="${s.id}" data-wd="${s.workDir}">↗</button><span class="dim">${s.when} — ${s.id.slice(0, 18)}… · ${s.workDir}</span></div>`).join('') || '<span class="dim">нет сессий</span>';
+      `<div class="row" style="margin-bottom:4px"><button data-open="${esc(s.id)}" data-wd="${esc(s.workDir)}">↗</button><span class="dim">${esc(s.when)} — ${esc(s.id.slice(0, 18))}… · ${esc(s.workDir)}</span></div>`).join('') || '<span class="dim">нет сессий</span>';
     document.querySelectorAll('[data-open]').forEach(b => b.onclick = () =>
       api('/api/sessions/open', { method: 'POST', body: JSON.stringify({ id: b.dataset.open, workDir: b.dataset.wd }) }));
   } catch {}
@@ -268,7 +278,7 @@ function renderTab() {
       + row('model', `<input class="grow" list="modelList" data-ag="${n}" data-f="model" value="${esc(a.model)}" placeholder="пусто = default">`)
       + row('role', `<textarea data-ag="${n}" data-f="role">${esc(a.role)}</textarea>`) + '</fieldset>').join('')
       + `<div class="row"><input id="newAgent" placeholder="имя нового агента"><button id="addAgent">+ агент</button></div>`;
-    api('/api/models').then(r => r.json()).then(m => { $('modelList').innerHTML = m.map(x => `<option>${x}</option>`).join(''); });
+    api('/api/models').then(r => r.json()).then(m => { const dl = $('modelList'); if (dl) dl.innerHTML = m.map(x => `<option>${esc(x)}</option>`).join(''); });
     $('addAgent').onclick = () => { const n = $('newAgent').value.trim(); if (n) { SETTINGS.agents[n] = { workdir: '', model: '', role: '' }; renderTab(); } };
     b.querySelectorAll('[data-del-agent]').forEach(x => x.onclick = () => { delete SETTINGS.agents[x.dataset.delAgent]; renderTab(); });
   }
@@ -297,7 +307,7 @@ function renderTab() {
       + `<div class="row"><input id="newUser" placeholder="логин"><input id="newPass" type="password" placeholder="пароль (мин 4)"><button id="addUser">+ пользователь</button></div>`;
     (async () => {
       const r = await (await api('/api/users', { method: 'POST', body: '{}' })).json();
-      $('userList').innerHTML = (r.users || []).map(u => `${u} <button data-del-user="${u}">✕</button>`).join(' ') || 'нет';
+      $('userList').innerHTML = (r.users || []).map(u => `${esc(u)} <button data-del-user="${esc(u)}">✕</button>`).join(' ') || 'нет';
       document.querySelectorAll('[data-del-user]').forEach(x => x.onclick = async () => {
         await api('/api/users', { method: 'POST', body: JSON.stringify({ action: 'remove', login: x.dataset.delUser }) });
         renderTab();

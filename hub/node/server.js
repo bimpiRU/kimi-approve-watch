@@ -34,6 +34,7 @@ const readBody = req => new Promise(resolve => {
   let b = '';
   req.on('data', c => { b += c; if (b.length > 1e6) req.destroy(); });
   req.on('end', () => { try { resolve(JSON.parse(b || '{}')); } catch { resolve({}); } });
+  req.on('close', () => resolve({}));
 });
 const baseUrl = req => `${req.headers['x-forwarded-proto'] || 'http'}://${req.headers.host}`;
 
@@ -81,6 +82,13 @@ async function handler(req, res) {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const p = url.pathname;
   secHeaders(res);
+  // анти-DNS-rebinding: Host только локальный
+  const hostOk = /^(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/.test(req.headers.host || '') || HOST !== '127.0.0.1';
+  if (!hostOk) { res.writeHead(403); return res.end('bad host'); }
+  // анти-CSRF: браузерные cross-site POST к API отсекаем
+  if (req.method === 'POST' && p.startsWith('/api/') && req.headers['sec-fetch-site'] && req.headers['sec-fetch-site'] !== 'same-origin') {
+    return json(res, 403, { error: 'bad origin' });
+  }
   // есть сертификат — весь HTTP уходит на HTTPS (кроме health для watchdog)
   if (httpsEnabled && !req.socket.encrypted && p !== '/api/health') {
     const host = (req.headers.host || 'localhost').split(':')[0];
@@ -116,7 +124,7 @@ async function handler(req, res) {
     if (p === '/auth/pin' && req.method === 'POST') {
       if (bruteForceLimited(req)) return text(res, 429, 'слишком много попыток, подожди 5 минут');
       const body = await readBody(req);
-      if (auth.pinEnabled() && body.pin === process.env.AUTH_PIN) {
+      if (auth.pinEnabled() && auth.verifyPin(body.pin)) {
         const token = auth.createSession('admin (pin)', 'pin');
         res.writeHead(302, {
           'Set-Cookie': `jh_session=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${7 * 24 * 3600}${secureCookie(req)}`,
@@ -154,7 +162,8 @@ async function handler(req, res) {
 
     // --- защищённые маршруты ---
     const agentToken = process.env.AGENT_TOKEN;
-    const isAgent = agentToken && req.headers['x-agent-token'] === agentToken; // локальные агенты (мастерагент)
+    const agentPaths = ['/api/dispatch', '/api/broadcast', '/api/state', '/api/result']; // агентам — только это
+    const isAgent = agentToken && req.headers['x-agent-token'] === agentToken && agentPaths.includes(p);
     if (auth.anyConfigured() && !auth.getSession(req) && !isAgent) {
       if (p.startsWith('/api/')) return json(res, 401, { error: 'unauthorized' });
     }
@@ -199,7 +208,8 @@ async function handler(req, res) {
     }
     if (p === '/api/prune' && req.method === 'POST') {
       const body = await readBody(req);
-      return json(res, 200, disp.prune(RUNS_DIR, body.minutes || 30));
+      const minutes = Math.min(1440, Math.max(1, parseInt(body.minutes, 10) || 30));
+      return json(res, 200, disp.prune(RUNS_DIR, minutes));
     }
     if (p === '/api/restart' && req.method === 'POST') {
       json(res, 200, { ok: true });
@@ -236,7 +246,7 @@ async function handler(req, res) {
     if (p === '/api/sessions/open' && req.method === 'POST') {
       const body = await readBody(req);
       const id = String(body.id || '').replace(/[^\w-]/g, '');
-      const workDir = String(body.workDir || process.env.USERPROFILE);
+      const workDir = String(body.workDir || process.env.USERPROFILE).replace(/["\r\n]/g, '');
       if (!id) return json(res, 400, { ok: false, error: 'нет id' });
       const kimi = path.join(process.env.USERPROFILE, '.kimi-code', 'bin', 'kimi.exe');
       const f = path.join(RUNS_DIR, `open-${Date.now()}.cmd`);
@@ -246,11 +256,14 @@ async function handler(req, res) {
     }
     if (p === '/api/stop' && req.method === 'POST') {
       const body = await readBody(req);
-      const agent = String(body.agent || '').replace(/[^\w-]/g, '');
+      const m = String(body.runId || '').match(/^(.*)-\d{8}-\d{6}/);
+      const agent = (m ? m[1] : String(body.agent || '')).replace(/[^\w]/g, '');
       const lock = path.join(RUNS_DIR, `${agent}.lock`);
-      if (!fs.existsSync(lock)) return json(res, 404, { ok: false, error: 'агент не запущен' });
+      if (!agent || !fs.existsSync(lock)) return json(res, 404, { ok: false, error: 'агент не запущен' });
       const pid = parseInt(fs.readFileSync(lock, 'utf8'), 10);
-      require('child_process').execFile('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true }, () => {});
+      if (Number.isFinite(pid) && pid > 0) {
+        require('child_process').execFile('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true }, () => {});
+      }
       fs.rmSync(lock, { force: true });
       // помечаем активный запуск агента как остановленный
       const active = fs.readdirSync(RUNS_DIR).filter(f => f.startsWith(`${agent}-`) && f.endsWith('.cmd')
@@ -304,6 +317,19 @@ async function handler(req, res) {
           return json(res, 200, { ok: true });
         }
         settings = { ...settings, ...body };
+        // валидация типов секций — битые данные не должны валить /api/state
+        for (const k of ['theme', 'themes', 'agents', 'commands']) {
+          if (settings[k] && (typeof settings[k] !== 'object' || Array.isArray(settings[k]))) return json(res, 400, { ok: false, error: `${k}: нужен объект` });
+        }
+        for (const k of ['repos', 'presets']) {
+          if (settings[k] && !Array.isArray(settings[k])) return json(res, 400, { ok: false, error: `${k}: нужен массив` });
+        }
+        // осознанное удаление дефолтных агентов — не воскрешать после рестарта
+        const deleted = (settings.agentsDeleted || []).slice();
+        for (const name of Object.keys(settingsStore.DEFAULTS.agents)) {
+          if (!settings.agents[name] && !deleted.includes(name)) deleted.push(name);
+        }
+        settings.agentsDeleted = deleted;
         settingsStore.save(settings);
         return json(res, 200, { ok: true });
       }
@@ -315,7 +341,20 @@ async function handler(req, res) {
   }
 }
 
+// без auth наружу (0.0.0.0) — не стартуем, кроме явного ALLOW_INSECURE_OPEN=1
+if (HOST !== '127.0.0.1' && HOST !== 'localhost' && !auth.anyConfigured() && process.env.ALLOW_INSECURE_OPEN !== '1') {
+  console.error('ОТКАЗ: HOST=' + HOST + ' без аутентификации — это открытый RCE для сети. Настрой логин/OAuth/PIN или ALLOW_INSECURE_OPEN=1.');
+  process.exit(1);
+}
+
 const server = http.createServer(handler);
+let listenTries = 0;
+server.on('error', err => {
+  if (err.code === 'EADDRINUSE' && listenTries++ < 5) {
+    console.log(`порт ${PORT} занят, retry ${listenTries}/5...`);
+    setTimeout(() => server.listen(PORT, HOST), 1000);
+  } else console.error('server error:', err.message);
+});
 server.listen(PORT, HOST, () => {
   console.log(`Jarvis Hub: http://${HOST}:${PORT}/  (help: /help, auth: ${auth.anyConfigured() ? auth.providers().join('+') : 'off, local mode'})`);
   require('./lib/telegram').start({

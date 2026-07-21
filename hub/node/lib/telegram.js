@@ -140,12 +140,15 @@ async function onMessage(ctx, msg) {
 }
 
 function watchRuns(ctx) {
+  const RUN_RE = /^\w+-\d{8}-\d{6}.*\.exit$/; // только запуски агентов, не служебные cmd-*/open-*
   const seen = new Set();
-  try { for (const f of fs.readdirSync(ctx.RUNS_DIR)) if (f.endsWith('.exit')) seen.add(f); } catch {}
+  try { for (const f of fs.readdirSync(ctx.RUNS_DIR)) if (RUN_RE.test(f)) seen.add(f); } catch {}
   setInterval(() => {
     try {
-      for (const f of fs.readdirSync(ctx.RUNS_DIR)) {
-        if (!f.endsWith('.exit') || seen.has(f)) continue;
+      const files = fs.readdirSync(ctx.RUNS_DIR);
+      for (const f of [...seen]) if (!files.includes(f)) seen.delete(f); // чистка удалённых
+      for (const f of files) {
+        if (!RUN_RE.test(f) || seen.has(f)) continue;
         seen.add(f);
         const id = f.replace(/\.exit$/, '');
         const code = fs.readFileSync(path.join(ctx.RUNS_DIR, f), 'utf8').trim();
@@ -157,19 +160,27 @@ function watchRuns(ctx) {
   }, 10000).unref();
 }
 
+const OFFSET_FILE = path.join(__dirname, '..', 'data', 'tg-offset.txt');
+
 function start(ctx) {
   if (!token()) { console.log('[telegram] TELEGRAM_BOT_TOKEN не задан — бот выключен'); return; }
   let offset = 0;
+  try { offset = parseInt(fs.readFileSync(OFFSET_FILE, 'utf8'), 10) || 0; } catch {}
   (async function poll() {
     for (;;) {
       try {
-        const r = await fetch(`${api()}/getUpdates?offset=${offset}&timeout=25`);
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), 35000);
+        const r = await fetch(`${api()}/getUpdates?offset=${offset}&timeout=25`, { signal: ctrl.signal });
+        clearTimeout(timer);
         const d = await r.json();
+        if (!d.ok) { await new Promise(r2 => setTimeout(r2, 5000)); continue; } // нет hot-loop при ошибке API
         for (const u of d.result || []) {
           offset = u.update_id + 1;
-          if (u.callback_query) onCallback(ctx, u.callback_query).catch(() => {});
-          else if (u.message) onMessage(ctx, u.message).catch(() => {});
+          if (u.callback_query) await onCallback(ctx, u.callback_query).catch(() => {});
+          else if (u.message) await onMessage(ctx, u.message).catch(() => {});
         }
+        try { fs.writeFileSync(OFFSET_FILE, String(offset), 'utf8'); } catch {} // персист после батча — без повторов при рестарте
       } catch { await new Promise(r2 => setTimeout(r2, 5000)); }
     }
   })();

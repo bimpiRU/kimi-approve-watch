@@ -44,13 +44,26 @@ const DEFAULTS = {
   ],
 };
 
+// атомарная запись (tmp + rename) — падение посреди write не убивает settings.json
+function writeAtomic(file, data) {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  const tmp = `${file}.tmp`;
+  fs.writeFileSync(tmp, data, 'utf8');
+  fs.renameSync(tmp, file);
+}
+
 function load() {
   let stored = {};
   try { stored = JSON.parse(fs.readFileSync(FILE, 'utf8')); } catch {}
+  // агенты: stored имеет приоритет; master гарантирован, пока его не удалили осознанно
+  const deleted = Array.isArray(stored.agentsDeleted) ? stored.agentsDeleted : [];
+  let agents = stored.agents && typeof stored.agents === 'object' && !Array.isArray(stored.agents) ? stored.agents : DEFAULTS.agents;
+  if (!agents.master && !deleted.includes('master')) agents = { ...agents, master: DEFAULTS.agents.master };
   return {
     theme: { ...DEFAULTS.theme, ...(stored.theme || {}) },
     themes: { ...DEFAULTS.themes, ...(stored.themes || {}) },
-    agents: { ...DEFAULTS.agents, ...(stored.agents || {}) }, // новые дефолтные агенты (master) подтягиваются сами
+    agents,
+    agentsDeleted: deleted,
     commands: stored.commands || DEFAULTS.commands,
     repos: stored.repos || DEFAULTS.repos,
     presets: stored.presets || DEFAULTS.presets,
@@ -58,8 +71,7 @@ function load() {
 }
 
 function save(settings) {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-  fs.writeFileSync(FILE, JSON.stringify(settings, null, 2), 'utf8');
+  writeAtomic(FILE, JSON.stringify(settings, null, 2));
 }
 
 module.exports = { load, save, DEFAULTS };

@@ -36,14 +36,25 @@ const configured = p => !!(PROVIDERS[p].id() && PROVIDERS[p].secret());
 const pinEnabled = () => !!process.env.AUTH_PIN;
 const anyConfigured = () => Object.keys(PROVIDERS).some(configured) || pinEnabled() || Object.keys(users).length > 0;
 
+// атомарная запись (tmp + rename) — падение посреди write не убивает файл данных
+function writeAtomic(file, data) {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  const tmp = `${file}.tmp`;
+  fs.writeFileSync(tmp, data, 'utf8');
+  fs.renameSync(tmp, file);
+}
+
 // --- сессии ---
 let sessions = new Map();
-try { sessions = new Map(JSON.parse(fs.readFileSync(SESSIONS_FILE, 'utf8'))); } catch {}
+try {
+  sessions = new Map(JSON.parse(fs.readFileSync(SESSIONS_FILE, 'utf8')));
+  const now = Date.now(); // выкидываем протухшие сразу при загрузке
+  for (const [k, s] of sessions) if (!s || now - s.created > SESSION_TTL) sessions.delete(k);
+} catch {}
 const pendingStates = new Map(); // oauth state -> provider
 
 function persist() {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-  fs.writeFileSync(SESSIONS_FILE, JSON.stringify([...sessions]), 'utf8');
+  writeAtomic(SESSIONS_FILE, JSON.stringify([...sessions]));
 }
 
 function createSession(user, provider) {
@@ -115,15 +126,16 @@ let users = {};
 try { users = JSON.parse(fs.readFileSync(USERS_FILE, 'utf8')); } catch {}
 
 function persistUsers() {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-  fs.writeFileSync(USERS_FILE, JSON.stringify(users, null, 2), 'utf8');
+  writeAtomic(USERS_FILE, JSON.stringify(users, null, 2));
 }
 function hashPass(pass, salt) {
   return crypto.scryptSync(pass, salt, 32).toString('hex');
 }
 function addUser(login, pass) {
   login = String(login || '').trim().toLowerCase();
-  if (!login || !pass || String(pass).length < 4) return { ok: false, error: 'логин пуст или пароль короче 4 символов' };
+  if (!/^[a-z0-9_.@-]+$/.test(login)) return { ok: false, error: 'логин: только a-z 0-9 _ . @ -' };
+  if (['__proto__', 'constructor', 'prototype'].includes(login)) return { ok: false, error: 'недопустимый логин' };
+  if (!pass || String(pass).length < 4) return { ok: false, error: 'пароль короче 4 символов' };
   const salt = crypto.randomBytes(16).toString('hex');
   users[login] = { salt, hash: hashPass(pass, salt) };
   persistUsers();
@@ -135,11 +147,21 @@ function removeUser(login) {
   return { ok: true };
 }
 function verifyUser(login, pass) {
-  const u = users[String(login || '').trim().toLowerCase()];
+  const key = String(login || '').trim().toLowerCase();
+  const u = Object.hasOwn(users, key) ? users[key] : null;
   if (!u) return false;
-  return crypto.timingSafeEqual(Buffer.from(u.hash, 'hex'), Buffer.from(hashPass(pass, u.salt), 'hex'));
+  const a = Buffer.from(u.hash, 'hex');
+  const b = Buffer.from(hashPass(pass, u.salt), 'hex');
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+function verifyPin(pin) {
+  const real = process.env.AUTH_PIN || '';
+  if (!real) return false;
+  const a = Buffer.from(String(pin ?? ''), 'utf8');
+  const b = Buffer.from(real, 'utf8');
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 const listUsers = () => Object.keys(users);
 const localEnabled = () => Object.keys(users).length > 0;
 
-module.exports = { configured, anyConfigured, pinEnabled, localEnabled, providers: () => Object.keys(PROVIDERS).filter(configured), startAuth, finishAuth, createSession, getSession, destroySession, addUser, removeUser, verifyUser, listUsers };
+module.exports = { configured, anyConfigured, pinEnabled, localEnabled, providers: () => Object.keys(PROVIDERS).filter(configured), startAuth, finishAuth, createSession, getSession, destroySession, addUser, removeUser, verifyUser, verifyPin, listUsers };

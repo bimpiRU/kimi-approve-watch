@@ -27,17 +27,17 @@ function dispatch(settings, RUNS_DIR, agent, task) {
     fs.rmSync(lockFile, { force: true });
   }
 
-  const id = runId(agent);
+  const id = runId(agent) + '-' + String(Date.now() % 1000).padStart(3, '0');
   const log = path.join(RUNS_DIR, `${id}.log`);
   const errLog = path.join(RUNS_DIR, `${id}.err.log`);
   const exitF = path.join(RUNS_DIR, `${id}.exit`);
   const prompt = `${a.role}\n\nЗадача от главагента: ${task}\n\nКогда закончишь — дай краткий итог: что сделано, что нет и почему.`
     .replace(/\{AGENT_TOKEN\}/g, process.env.AGENT_TOKEN || '')
     .replace(/\{HUB_URL\}/g, `http://127.0.0.1:${process.env.PORT || 8787}`);
-  const modelArg = a.model ? `-m "${a.model}"` : '';
+  const modelArg = a.model ? `-m "${String(a.model).replace(/"/g, '')}"` : '';
   // Промпт уходит через env-переменную (Unicode, без проблем кодировки cmd);
-  // чистим только символы, ломающие парсинг cmd после подстановки.
-  const safe = prompt.replace(/\r?\n/g, ' ').replace(/"/g, "'").replace(/[&|<>^]/g, ' ');
+  // чистим символы, ломающие парсинг cmd после подстановки (включая %VAR%).
+  const safe = prompt.replace(/\r?\n/g, ' ').replace(/"/g, "'").replace(/[&|<>^%]/g, ' ');
   const cmdFile = path.join(RUNS_DIR, `${id}.cmd`);
   fs.writeFileSync(cmdFile, [
     '@echo off',
@@ -52,33 +52,40 @@ function dispatch(settings, RUNS_DIR, agent, task) {
     env: { ...process.env, JH_PROMPT: safe },
   });
   child.unref();
+  if (!child.pid) return { ok: false, error: 'не удалось запустить процесс' };
   fs.writeFileSync(lockFile, String(child.pid));
   return { ok: true, runId: id };
 }
 
 function prune(RUNS_DIR, olderThanMin = 30) {
   const now = Date.now();
+  const { execFileSync } = require('child_process');
   let killed = 0, cleaned = 0;
   for (const f of fs.readdirSync(RUNS_DIR)) {
     const full = path.join(RUNS_DIR, f);
     if (f.endsWith('.lock')) {
       const pid = parseInt(fs.readFileSync(full, 'utf8'), 10);
       let alive = false;
-      try { process.kill(pid, 0); alive = true; } catch {}
+      if (Number.isFinite(pid)) { try { process.kill(pid, 0); alive = true; } catch {} }
       if (!alive) { fs.rmSync(full, { force: true }); cleaned++; }
+      continue; // .lock не чистим по возрасту — агент может жить долго
     }
     if (f.endsWith('.cmd') && !fs.existsSync(full.replace(/\.cmd$/, '.exit'))) {
       const ageMin = (now - fs.statSync(full).birthtimeMs) / 60000;
       if (ageMin > olderThanMin) {
-        const agent = f.split('-')[0];
+        const m = f.match(/^(.*)-\d{8}-\d{6}/);
+        const agent = m ? m[1] : f.split('-')[0];
         const lock = path.join(RUNS_DIR, `${agent}.lock`);
         if (fs.existsSync(lock)) {
           const pid = parseInt(fs.readFileSync(lock, 'utf8'), 10);
-          try { process.kill(pid); killed++; } catch {}
+          if (Number.isFinite(pid) && pid > 0) {
+            try { execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' }); killed++; } catch {}
+          }
           fs.rmSync(lock, { force: true });
         }
         fs.writeFileSync(full.replace(/\.cmd$/, '.exit'), '-1');
       }
+      continue;
     }
     if (now - fs.statSync(full).mtimeMs > 7 * 24 * 3600 * 1000) { fs.rmSync(full, { force: true }); cleaned++; }
   }

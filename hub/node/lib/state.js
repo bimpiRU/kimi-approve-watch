@@ -18,9 +18,10 @@ function svcState(name) {
   return '';
 }
 
-// CPU: дельта между вызовами (loadavg на Windows бесполезен)
-let prevCpus = null;
+// CPU: дельта между вызовами, пересчёт не чаще раза в 2 сек (иначе показания плавают)
+let prevCpus = null, lastCpuVal = null, lastCpuAt = 0;
 function cpuPercent() {
+  if (Date.now() - lastCpuAt < 2000 && lastCpuVal !== null) return lastCpuVal;
   const cpus = os.cpus();
   if (!prevCpus) { prevCpus = cpus; return null; }
   let idle = 0, total = 0;
@@ -30,7 +31,9 @@ function cpuPercent() {
     total += (b.user + b.nice + b.sys + b.irq + b.idle) - (a.user + a.nice + a.sys + a.irq + a.idle);
   }
   prevCpus = cpus;
-  return total > 0 ? Math.round(100 * (1 - idle / total)) : null;
+  lastCpuAt = Date.now();
+  lastCpuVal = total > 0 ? Math.round(100 * (1 - idle / total)) : null;
+  return lastCpuVal;
 }
 
 function diskFreeGB() {
@@ -57,9 +60,11 @@ function ghelperState() {
 
 function runStates() {
   const runs = [];
+  const RUN_RE = /^\w+-\d{8}-\d{6}.*\.cmd$/; // только запуски агентов, без служебных cmd-*/open-*
   try {
-    const files = fs.readdirSync(RUNS_DIR).filter(f => f.endsWith('.cmd'))
-      .map(f => ({ f, t: fs.statSync(path.join(RUNS_DIR, f)).birthtime }))
+    const files = fs.readdirSync(RUNS_DIR).filter(f => RUN_RE.test(f))
+      .map(f => { try { return { f, t: fs.statSync(path.join(RUNS_DIR, f)).birthtime }; } catch { return null; } })
+      .filter(Boolean)
       .sort((a, b) => b.t - a.t).slice(0, 10);
     for (const { f, t } of files) {
       const id = f.replace(/\.cmd$/, '');
@@ -93,7 +98,15 @@ function repoStates(repos) {
 function agentStates(agents) {
   return Object.entries(agents).map(([name, a]) => ({
     name, model: a.model || 'default',
-    busy: (() => { try { return fs.existsSync(path.join(RUNS_DIR, `${name}.lock`)); } catch { return false; } })(),
+    busy: (() => {
+      try {
+        const lock = path.join(RUNS_DIR, `${name}.lock`);
+        if (!fs.existsSync(lock)) return false;
+        const pid = parseInt(fs.readFileSync(lock, 'utf8'), 10);
+        if (!Number.isFinite(pid)) return false;
+        try { process.kill(pid, 0); return true; } catch { return false; } // живость, не просто файл
+      } catch { return false; }
+    })(),
   }));
 }
 
