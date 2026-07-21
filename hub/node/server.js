@@ -250,8 +250,9 @@ async function handler(req, res) {
       if (!id) return json(res, 400, { ok: false, error: 'нет id' });
       const kimi = path.join(process.env.USERPROFILE, '.kimi-code', 'bin', 'kimi.exe');
       const f = path.join(RUNS_DIR, `open-${Date.now()}.cmd`);
-      fs.writeFileSync(f, `@echo off\r\nstart "" wt -w new -d "${workDir}" cmd /k ""${kimi}" -S ${id}"\r\n`, 'ascii');
-      require('child_process').spawn('cmd.exe', ['/c', f], { stdio: 'ignore' }).unref();
+      // wt сам запускает программу — без хрупкого cmd /k с вложенными кавычками
+      fs.writeFileSync(f, `@echo off\r\nstart "" wt -w new -d "${workDir}" "${kimi}" -S ${id}\r\n`, 'ascii');
+      require('child_process').spawn('cmd.exe', ['/c', f], { stdio: 'ignore', windowsHide: true }).unref();
       return json(res, 200, { ok: true });
     }
     if (p === '/api/stop' && req.method === 'POST') {
